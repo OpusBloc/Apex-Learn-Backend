@@ -1,0 +1,14 @@
+/venv
+/.env
+/.pytest_cache
+/__pycache__
+*.pyc
+instance/
+migrations/
+models/
+routes/
+utils/
+dependencies.py
+m.py
+__init__.py
+database.db

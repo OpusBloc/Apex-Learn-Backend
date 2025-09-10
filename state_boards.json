@@ -1,0 +1,356 @@
+{
+  "secondary_boards": [
+    {
+      "state": "Andhra Pradesh",
+      "board_name": "Board of Secondary Education, Andhra Pradesh",
+      "website": "www.bse.ap.gov.in"
+    },
+    {
+      "state": "Arunachal Pradesh",
+      "board_name": "Directorate of School Education, Arunachal Pradesh",
+      "website": null
+    },
+    {
+      "state": "Assam",
+      "board_name": "Board of Secondary Education, Assam",
+      "website": "www.sebaonline.org"
+    },
+    {
+      "state": "Bihar",
+      "board_name": "Bihar School Examination Board",
+      "website": "biharboardonline.bihar.gov.in"
+    },
+    {
+      "state": "Chhattisgarh",
+      "board_name": "Chhattisgarh Board of Secondary Education",
+      "website": "www.cgbse.nic.in"
+    },
+    {
+      "state": "Goa",
+      "board_name": "Goa Board of Secondary & Higher Secondary Education",
+      "website": "www.gbshse.gov.in"
+    },
+    {
+      "state": "Gujarat",
+      "board_name": "Gujarat Secondary and Higher Secondary Education Board",
+      "website": "www.gseb.org"
+    },
+    {
+      "state": "Haryana",
+      "board_name": "Haryana Board of School Education",
+      "website": "www.bseh.org.in"
+    },
+    {
+      "state": "Himachal Pradesh",
+      "board_name": "Himachal Pradesh Board of School Education",
+      "website": "www.hpbose.org"
+    },
+    {
+      "state": "Jharkhand",
+      "board_name": "Jharkhand Academic Council",
+      "website": "www.jac.jharkhand.gov.in"
+    },
+    {
+      "state": "Karnataka",
+      "board_name": "Karnataka Secondary Education Examination Board",
+      "website": "www.kseab.karnataka.gov.in"
+    },
+    {
+      "state": "Kerala",
+      "board_name": "Kerala Board of Public Examinations",
+      "website": "www.keralapareekshabhavan.in"
+    },
+    {
+      "state": "Madhya Pradesh",
+      "board_name": "Madhya Pradesh Board of Secondary Education",
+      "website": "www.mpbse.nic.in"
+    },
+    {
+      "state": "Maharashtra",
+      "board_name": "Maharashtra State Board of Secondary and Higher Secondary Education",
+      "website": "www.mahahsscboard.in"
+    },
+    {
+      "state": "Manipur",
+      "board_name": "Board of Secondary Education, Manipur",
+      "website": "bsem.nic.in"
+    },
+    {
+      "state": "Meghalaya",
+      "board_name": "Meghalaya Board of School Education",
+      "website": "www.mbose.in"
+    },
+    {
+      "state": "Mizoram",
+      "board_name": "Mizoram Board of School Education",
+      "website": "www.mbse.edu.in"
+    },
+    {
+      "state": "Nagaland",
+      "board_name": "Nagaland Board of School Education",
+      "website": "www.nbsenl.edu.in"
+    },
+    {
+      "state": "Odisha",
+      "board_name": "Board of Secondary Education, Odisha",
+      "website": "www.bseodisha.ac.in"
+    },
+    {
+      "state": "Punjab",
+      "board_name": "Punjab School Education Board",
+      "website": "www.pseb.ac.in"
+    },
+    {
+      "state": "Rajasthan",
+      "board_name": "Rajasthan Board of Secondary Education",
+      "website": "rajeduboard.rajasthan.gov.in"
+    },
+    {
+      "state": "Tamil Nadu",
+      "board_name": "Tamil Nadu Board of Secondary Education",
+      "website": "www.tamilnadustateboard.org"
+    },
+    {
+      "state": "Telangana",
+      "board_name": "Telangana State Board of Secondary Education",
+      "website": "www.bse.telangana.gov.in"
+    },
+    {
+      "state": "Tripura",
+      "board_name": "Tripura Board of Secondary Education",
+      "website": "www.tbse.tripura.gov.in"
+    },
+    {
+      "state": "Uttar Pradesh",
+      "board_name": "Uttar Pradesh Madhyamik Shiksha Parishad",
+      "website": "upmsp.edu.in"
+    },
+    {
+      "state": "Uttarakhand",
+      "board_name": "Uttarakhand Board of School Education",
+      "website": "www.ubse.uk.gov.in"
+    },
+    {
+      "state": "West Bengal",
+      "board_name": "West Bengal Board of Secondary Education",
+      "website": "www.wbbse.wb.gov.in"
+    },
+    {
+      "state": "Andaman and Nicobar Islands",
+      "board_name": "Directorate of Education, Andaman and Nicobar",
+      "website": null
+    },
+    {
+      "state": "Chandigarh",
+      "board_name": "Chandigarh Education Department",
+      "website": null
+    },
+    {
+      "state": "Dadra and Nagar Haveli and Daman and Diu",
+      "board_name": "Directorate of Education, DNH and DD",
+      "website": null
+    },
+    {
+      "state": "Delhi",
+      "board_name": "Directorate of Education, Delhi",
+      "website": "www.edudel.nic.in"
+    },
+    {
+      "state": "Jammu and Kashmir",
+      "board_name": "Jammu and Kashmir Board of School Education",
+      "website": "www.jkbose.nic.in"
+    },
+    {
+      "state": "Ladakh",
+      "board_name": "Ladakh Board of School Education",
+      "website": null
+    },
+    {
+      "state": "Lakshadweep",
+      "board_name": "Department of Education, Lakshadweep",
+      "website": null
+    },
+    {
+      "state": "Puducherry",
+      "board_name": "Directorate of School Education, Puducherry",
+      "website": "schooledn.py.gov.in"
+    }
+  ],
+  "higher_secondary_boards": [
+    {
+      "state": "Andhra Pradesh",
+      "board_name": "Board of Intermediate Education, Andhra Pradesh",
+      "website": "www.bie.ap.gov.in"
+    },
+    {
+      "state": "Arunachal Pradesh",
+      "board_name": "Directorate of School Education, Arunachal Pradesh",
+      "website": null
+    },
+    {
+      "state": "Assam",
+      "board_name": "Assam Higher Secondary Education Council",
+      "website": "www.ahsec.assam.gov.in"
+    },
+    {
+      "state": "Bihar",
+      "board_name": "Bihar School Examination Board",
+      "website": "biharboardonline.bihar.gov.in"
+    },
+    {
+      "state": "Chhattisgarh",
+      "board_name": "Chhattisgarh Board of Secondary Education",
+      "website": "www.cgbse.nic.in"
+    },
+    {
+      "state": "Goa",
+      "board_name": "Goa Board of Secondary & Higher Secondary Education",
+      "website": "www.gbshse.gov.in"
+    },
+    {
+      "state": "Gujarat",
+      "board_name": "Gujarat Secondary and Higher Secondary Education Board",
+      "website": "www.gseb.org"
+    },
+    {
+      "state": "Haryana",
+      "board_name": "Haryana Board of School Education",
+      "website": "www.bseh.org.in"
+    },
+    {
+      "state": "Himachal Pradesh",
+      "board_name": "Himachal Pradesh Board of School Education",
+      "website": "www.hpbose.org"
+    },
+    {
+      "state": "Jharkhand",
+      "board_name": "Jharkhand Academic Council",
+      "website": "www.jac.jharkhand.gov.in"
+    },
+    {
+      "state": "Karnataka",
+      "board_name": "Department of Pre-University Education, Karnataka",
+      "website": "www.pue.kar.nic.in"
+    },
+    {
+      "state": "Kerala",
+      "board_name": "Kerala Board of Higher Secondary Examinations",
+      "website": "www.dhsekerala.gov.in"
+    },
+    {
+      "state": "Madhya Pradesh",
+      "board_name": "Madhya Pradesh Board of Secondary Education",
+      "website": "www.mpbse.nic.in"
+    },
+    {
+      "state": "Maharashtra",
+      "board_name": "Maharashtra State Board of Secondary and Higher Secondary Education",
+      "website": "www.mahahsscboard.in"
+    },
+    {
+      "state": "Manipur",
+      "board_name": "Council of Higher Secondary Education, Manipur",
+      "website": "cohsem.nic.in"
+    },
+    {
+      "state": "Meghalaya",
+      "board_name": "Meghalaya Board of School Education",
+      "website": "www.mbose.in"
+    },
+    {
+      "state": "Mizoram",
+      "board_name": "Mizoram Board of School Education",
+      "website": "www.mbse.edu.in"
+    },
+    {
+      "state": "Nagaland",
+      "board_name": "Nagaland Board of School Education",
+      "website": "www.nbsenl.edu.in"
+    },
+    {
+      "state": "Odisha",
+      "board_name": "Council of Higher Secondary Education, Odisha",
+      "website": "www.chseodisha.nic.in"
+    },
+    {
+      "state": "Punjab",
+      "board_name": "Punjab School Education Board",
+      "website": "www.pseb.ac.in"
+    },
+    {
+      "state": "Rajasthan",
+      "board_name": "Rajasthan Board of Secondary Education",
+      "website": "rajeduboard.rajasthan.gov.in"
+    },
+    {
+      "state": "Tamil Nadu",
+      "board_name": "Tamil Nadu Board of Higher Secondary Education",
+      "website": "www.tamilnadustateboard.org"
+    },
+    {
+      "state": "Telangana",
+      "board_name": "Telangana State Board of Intermediate Education",
+      "website": "tsbie.cgg.gov.in"
+    },
+    {
+      "state": "Tripura",
+      "board_name": "Tripura Board of Secondary Education",
+      "website": "www.tbse.tripura.gov.in"
+    },
+    {
+      "state": "Uttar Pradesh",
+      "board_name": "Uttar Pradesh Madhyamik Shiksha Parishad",
+      "website": "upmsp.edu.in"
+    },
+    {
+      "state": "Uttarakhand",
+      "board_name": "Uttarakhand Board of School Education",
+      "website": "www.ubse.uk.gov.in"
+    },
+    {
+      "state": "West Bengal",
+      "board_name": "West Bengal Council of Higher Secondary Education",
+      "website": "www.wbchse.wb.gov.in"
+    },
+    {
+      "state": "Andaman and Nicobar Islands",
+      "board_name": "Directorate of Education, Andaman and Nicobar",
+      "website": null
+    },
+    {
+      "state": "Chandigarh",
+      "board_name": "Chandigarh Education Department",
+      "website": null
+    },
+    {
+      "state": "Dadra and Nagar Haveli and Daman and Diu",
+      "board_name": "Directorate of Education, DNH and DD",
+      "website": null
+    },
+    {
+      "state": "Delhi",
+      "board_name": "Directorate of Education, Delhi",
+      "website": "www.edudel.nic.in"
+    },
+    {
+      "state": "Jammu and Kashmir",
+      "board_name": "Jammu and Kashmir Board of School Education",
+      "website": "www.jkbose.nic.in"
+    },
+    {
+      "state": "Ladakh",
+      "board_name": "Ladakh Board of School Education",
+      "website": null
+    },
+    {
+      "state": "Lakshadweep",
+      "board_name": "Department of Education, Lakshadweep",
+      "website": null
+    },
+    {
+      "state": "Puducherry",
+      "board_name": "Directorate of School Education, Puducherry",
+      "website": "schooledn.py.gov.in"
+    }
+  ]
+}
