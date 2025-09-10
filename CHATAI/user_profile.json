@@ -1,0 +1,56 @@
+{
+    "user_id": "dummy_test_student",
+    "board": "CBSE",
+    "class": "10",
+    "target_score": 96,
+    "exam_date": "2025-03-15",
+    "study_sessions": [],
+    "performance_log": [
+        {
+            "timestamp": "2025-09-08T11:00:00Z",
+            "subject": "Science",
+            "topic": "Chemical Reactions",
+            "is_correct": true
+        },
+        {
+            "timestamp": "2025-09-08T11:01:00Z",
+            "subject": "Science",
+            "topic": "Reflection of Light",
+            "is_correct": false
+        },
+        {
+            "timestamp": "2025-09-09T15:30:00Z",
+            "subject": "Mathematics",
+            "topic": "Trigonometry",
+            "is_correct": true
+        },
+        {
+            "timestamp": "2025-09-09T15:31:00Z",
+            "subject": "Science",
+            "topic": "Reflection of Light",
+            "is_correct": true
+        }
+    ],
+    "performance_data_per_subject": {
+        "Science": {
+            "Chemical Reactions": {
+                "correct": 8,
+                "total": 10
+            },
+            "Acids, Bases and Salts": {
+                "correct": 9,
+                "total": 10
+            },
+            "Reflection of Light": {
+                "correct": 3,
+                "total": 12
+            }
+        },
+        "Mathematics": {
+            "Trigonometry": {
+                "correct": 16,
+                "total": 16
+            }
+        }
+    }
+}
