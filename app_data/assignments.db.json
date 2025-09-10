@@ -1,0 +1,23 @@
+{
+    "b2622801-65fd-493e-b1fb-1727eb044825": {
+        "worksheet_id": "21c11cb2-a4ba-4c85-9620-e3ca1344b982",
+        "class_id": "e5ab290b-8bf7-4420-8763-6451153dfe32",
+        "topic": "magnetic effects of current",
+        "assigned_date": "2025-09-08",
+        "due_date": "2025-09-08"
+    },
+    "ea039e6e-231a-4724-a2e8-5e24b0f285a4": {
+        "worksheet_id": "68a2c635-0c8c-4614-ac94-f9002b24a5a8",
+        "class_id": "b7f634ff-3b8e-4c2b-b5f0-43b16526335e",
+        "topic": "statistics",
+        "assigned_date": "2025-09-08",
+        "due_date": "2025-09-08"
+    },
+    "7059d3cd-8bae-48fe-a71b-2e6cf1e1a541": {
+        "worksheet_id": "f7d928b7-2754-487e-8580-075defe47a74",
+        "class_id": "b7f634ff-3b8e-4c2b-b5f0-43b16526335e",
+        "topic": "probability",
+        "assigned_date": "2025-09-08",
+        "due_date": "2025-09-08"
+    }
+}

@@ -1,0 +1,27 @@
+{
+    "e5ab290b-8bf7-4420-8763-6451153dfe32": {
+        "class_name": "class 10A physics",
+        "students": [
+            {
+                "student_id": "bb5d296e-e494-4465-a2b5-9c9336806e3b",
+                "name": "Pooja Jaiswal",
+                "pin": "4230"
+            }
+        ]
+    },
+    "b7f634ff-3b8e-4c2b-b5f0-43b16526335e": {
+        "class_name": "class 10 Mathematics",
+        "students": [
+            {
+                "student_id": "7dc3719d-1aa6-40e4-a068-3f44e1dbffed",
+                "name": "Pooja Jaiswal",
+                "pin": "4230"
+            },
+            {
+                "student_id": "ac120255-5f5a-4611-95a4-91c7a1f4cd60",
+                "name": "Bhoomi Jaiswal",
+                "pin": "1234"
+            }
+        ]
+    }
+}
