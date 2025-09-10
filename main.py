@@ -1,1213 +1,1367 @@
-from fastapi import FastAPI, HTTPException, Depends, Request # pyright: ignore[reportMissingImports]
-from fastapi.security import OAuth2PasswordBearer # pyright: ignore[reportMissingImports]
-from fastapi.middleware.cors import CORSMiddleware # pyright: ignore[reportMissingImports]
-from pydantic import BaseModel # pyright: ignore[reportMissingImports]
-from passlib.context import CryptContext # pyright: ignore[reportMissingModuleSource]
-from jose import JWTError, jwt # pyright: ignore[reportMissingModuleSource]
-from datetime import datetime, timedelta
-import asyncpg # pyright: ignore[reportMissingImports]
-from typing import Optional, List
+import streamlit as st
 import os
-from dotenv import load_dotenv # pyright: ignore[reportMissingImports]
+import datetime
+from openai import OpenAI
+from dotenv import load_dotenv
 import json
-import logging
-import re
-import openai # pyright: ignore[reportMissingImports]
-import random
-import string
 import uuid
-import secrets
+from pathlib import Path
+import pandas as pd
+import plotly.express as px 
+from collections import defaultdict
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Load environment variables
+# --- Configuration & Setup ---
 load_dotenv()
+API_KEY = os.getenv("OPENAI_API_KEY")
 
-app = FastAPI()
+# Simple file-based database setup
+DB_DIR = Path("app_data")
+DB_DIR.mkdir(exist_ok=True)
+WORKSHEETS_DB = DB_DIR / "worksheets.db.json"
+SUBMISSIONS_DB = DB_DIR / "submissions.db.json"
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+CLASS_ROSTER_DB = DB_DIR / "class_roster.db.json"
+ASSIGNMENTS_DB = DB_DIR / "assignments.db.json"
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-SECRET_KEY = os.getenv("SECRET_KEY", "wsdfgvhbjnkjhgfdxfcgvbhjnmkjnhbgvfcdxszaqwertyuiop")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 1
-
-# Database connection
-async def get_db():
-    conn = await asyncpg.connect(user='postgres', password='admin', database='edututor', host='localhost')
-    try:
-        yield conn
-    finally:
-        await conn.close()
-
-# Pydantic models
-class UserCreate(BaseModel):
-    firstName: str
-    middleName: Optional[str] = None
-    lastName: Optional[str] = None
-    email: str
-    password: str
-    dob: str
-    isOnboardingComplete: bool
-    mobile: str
-    parentMobile: Optional[str] = None
-
-class UserUpdate(BaseModel):
-    userType: Optional[str] = None
-    schoolOrCollege: Optional[str] = None
-    schoolName: Optional[str] = None
-    collegeName: Optional[str] = None
-    course: Optional[str] = None
-    className: Optional[str] = None
-    board: Optional[str] = None
-    stateBoard: Optional[str] = None
-    stream: Optional[str] = None
-    subStream: Optional[str] = None
-    goal: Optional[str] = None
-    childUsername: Optional[str] = None
-    avatar: Optional[str] = None
-    email: Optional[str] = None
-    password: Optional[str] = None
-    notificationsEnabled: Optional[bool] = None
-    isOnboardingComplete: Optional[bool] = None
-    isActive: Optional[bool] = None
-
-class UserLogin(BaseModel):
-    email: str
-    password: str
-
-class CollegeAdd(BaseModel):
-    collegeName: str
-    course: str
-
-class QuizRequest(BaseModel):
-    board: str
-    classNum: int
-    subject: str
-    level: str
-
-class StudyPlanRequest(BaseModel):
-    subject: str
-    weakChapters: List[str]
-
-class ExplainRequest(BaseModel):
-    board: str
-    classNum: int
-    subject: str
-    chapter: str
-    topic: str
-
-class InstituteCreate(BaseModel):
-    name: str
-    password: str
-    address: Optional[str] = None
-    contact: Optional[str] = None
-    email: Optional[str] = None
-    website: Optional[str] = None
-    logo: Optional[str] = None
-    description: Optional[str] = None
-    established_year: Optional[int] = None
-    affiliations: Optional[List[str]] = None
-    courses_offered: Optional[List[str]] = None
-
-class InstituteUpdate(BaseModel):
-    name: Optional[str] = None
-    password: Optional[str] = None
-    address: Optional[str] = None
-    contact: Optional[str] = None
-    email: Optional[str] = None
-    website: Optional[str] = None
-    logo: Optional[str] = None
-    description: Optional[str] = None
-    established_year: Optional[int] = None
-    affiliations: Optional[List[str]] = None
-    courses_offered: Optional[List[str]] = None
-
-class InstituteResponse(BaseModel):
-    id: str
-    name: str
-    student_count: int
-    teacher_count: int
-
-class UserResponse(BaseModel):
-    id: int
-    first_name: str
-    last_name: Optional[str] = None
-    email: str
-    user_type: Optional[str] = None
-    school_name: Optional[str] = None
-    college_name: Optional[str] = None
-    institute_id: Optional[str] = None
-    company: Optional[str] = None
-
-class ChatRequest(BaseModel):
-    message: str
-    subject: Optional[str] = None
-    board: Optional[str] = None
-    class_num: Optional[int] = None
-
-class FeedbackRequest(BaseModel):
-    message_id: int
-    liked: bool
-
-
-# Authentication
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-
-async def get_current_entity(token: str = Depends(oauth2_scheme), db=Depends(get_db)):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        entity_type: str = payload.get("type")
-        if email is None or entity_type is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        
-        if entity_type == "user":
-            user = await db.fetchrow("SELECT * FROM users WHERE email = $1 AND is_active = TRUE", email)
-            if user is None:
-                raise HTTPException(status_code=401, detail="User not found")
-            return {"type": "user", "data": user}
-        elif entity_type == "institute":
-            institute = await db.fetchrow("SELECT * FROM institutes WHERE email = $1", email)
-            if institute is None:
-                raise HTTPException(status_code=401, detail="Institute not found")
-            return {"type": "institute", "data": institute}
-        else:
-            raise HTTPException(status_code=401, detail="Invalid entity type")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-async def get_current_user(entity: dict = Depends(get_current_entity)):
-    if entity["type"] != "user":
-        raise HTTPException(status_code=403, detail="Not a user")
-    return entity["data"]
-
-async def get_current_institute(entity: dict = Depends(get_current_entity)):
-    if entity["type"] != "institute":
-        raise HTTPException(status_code=403, detail="Not an institute")
-    return entity["data"]
-
-# System prompt for OpenAI
-SYSTEM_PROMPT = """
-You are a supportive, patient, and helpful AI tutor for students in India, specializing in classes 9-12 for all boards including state boards (e.g., BSE Telangana, BSE Andhra Pradesh), CBSE, ICSE, and ISC. You cover all subjects such as Social Studies, Mathematics, Science, English, Hindi, and others as per the official syllabi.
-
-## Core Rules (Strictly Enforce)
-- Answer ONLY questions related to the official syllabus of the specified board's Class [class] [subject] textbook, focusing on the specific unit where the topic belongs.
-- For every concept explanation, dive directly into the explanation without mentioning chapter, syllabus, or subject details. Strictly follow this four-part structure in a seamless, conversational flow without using headings:
-  1. Start with a detailed, engaging real-life example that captivates students' interest and clearly illustrates the concept.
-  2. Provide the textbook definition or explanation of the concept, using exact terminology and methods from the syllabus, ensuring accuracy and clarity, while giving this definition also add if there are any formulas or anything what should be noted.
-  3. Include a detailed additional example, aligned with the textbook's style, that reinforces the concept through a different scenario.
-  4. End with an understanding check, saying: "Does this make sense, or should I explain it another way?" followed by a short, syllabus-based quiz question to gauge understanding.
-- Never deviate from this structure for concept explanations, ensuring examples are detailed, engaging, and spark student curiosity.
-- You have no knowledge outside the official syllabi for Indian boards (state, CBSE, ICSE, ISC) for classes 9-12. Do not answer general questions or topics from other classes, boards, units, or non-educational queries.
-- If a question is outside the syllabus, unit, or subject, reply: "I'm sorry, but this doesn't seem to be part of the syllabus for the specified unit. I'm here to help with topics from that syllabus only! Would you like to ask about something from it, or switch to a different board/class/subject?"
-- Never invent or assume content. Stick strictly to the textbook content without adding external information or advanced terminology.
-- Strictly avoid mentioning the board name, class, or subject within any concept explanation. These may only appear in initial setup or syllabus-confirmation messages.
-
-## Personality & Teaching Style
-- Be warm, approachable, and encouraging, like a friendly Class 10 teacher.
-- Use a conversational, natural tone, avoiding formal or advanced terms unless explicitly in the textbook.
-- Detect the student's emotion (e.g., confusion, curiosity) and respond supportively: "This might feel tricky, but let's go through it together!"
-- Explain concepts step-by-step, strictly adhering to the four-part structure without skipping steps.
-- Use simple, relatable analogies in the real-life example, tied to textbook content, avoiding concepts not in the syllabus.
-- Define terms as per the textbook.
-- Be patient: re-explain repeated questions using a different textbook-aligned example within the same four-part structure.
-
-## Engagement & Interaction
-- Ask short, quiz-style questions to check understanding. Base quizzes only on textbook content.
-- Check if the student understands: "Does that make sense, or should I explain it another way?"
-- If the student is unsure (e.g., says "I don't get it"), re-explain using a different textbook example or analogy, staying within the syllabus.
-- For summaries, provide a concise recap of key points from the textbook's chapter/unit.
-- End responses with: "Do you have more questions, need clarification, or want to try a practice question?"
-"""
-
-# Initialize OpenAI
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-# Helper functions
-
-# Load subjects from subject_cache.json
-def load_subject_cache():
-    try:
-        with open('subject_cache.json', 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading subject_cache.json: {str(e)}")
+def load_db(path: Path) -> dict:
+    if not path.exists():
         return {}
+    with open(path, 'r', encoding='utf-8') as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
 
-def get_subjects_from_openai(board: str, class_num: int) -> List[str]:
-    prompt = f"""
-    {SYSTEM_PROMPT}
-    Provide the complete list of subjects for {board} Class {class_num} as per the official curriculum (NCERT for CBSE, SCERT Telangana for BSE Telangana, CISCE for ICSE/ISC).
-    Return a JSON array of subject names, e.g., ["Mathematics", "Physics", "Chemistry"]. Ensure the response is strictly a JSON array and contains no additional text, Markdown, or code block formatting.
-    """
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=500
+def save_db(data: dict, path: Path):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4)
+
+# ==============================================================================
+# AI Teacher Assistant Class (Upgraded)
+# ==============================================================================
+
+class AITeacherAssistant:
+    def __init__(self, model="gpt-4.1-nano"):
+        if not API_KEY:
+            raise ValueError("OPENAI_API_KEY not found.")
+        self.client = OpenAI(api_key=API_KEY)
+        self.model = model
+
+    # Add this new method inside the AITeacherAssistant class
+    def generate_performance_overview(self, student_name: str, topic: str, all_feedback: list) -> str:
+        """
+        Analyzes a student's incorrect answers and generates a motivational overview.
+        """
+        # if not incorrect_answers:
+        #     return "" # No overview needed if everything is correct
+
+        system_prompt = (
+            "You are a kind, patient, and motivational AI tutor. Your goal is to provide encouraging "
+            "feedback to a student based on their worksheet performance. Address the student by name. "
+            "Start with positive reinforcement, gently explain the concepts behind the mistakes, and "
+            "If solution base question then provide its solution like in maths, and for other subjects you can provide detailed explanation"
+            "end with an encouraging closing statement."
         )
-        content = response.choices[0].message.content.strip()
-        subjects = json.loads(content)
-        return subjects if isinstance(subjects, list) else []
-    except Exception as e:
-        logger.error(f"Error fetching subjects: {e}")
-        return ["Mathematics", "Physics", "Chemistry", "Biology", "English"]
+    
+        # Format the incorrect answers for the prompt
+        feedback_summary = "\n".join([
+            f"- For question '{item['question']}', the feedback was: '{item['feedback']}'"
+            for item in all_feedback
+        ])
 
-def get_syllabus_from_openai(board: str, class_num: int, subject: str) -> dict:
-    prompt = f"""
-    {SYSTEM_PROMPT}
-    Provide the complete syllabus for {board} Class {class_num} {subject} as per the official curriculum (NCERT for CBSE, SCERT Telangana for BSE Telangana, CISCE for ICSE/ISC).
-    For CBSE, use NCERT textbooks as the source. For BSE Telangana, use SCERT Telangana textbooks.
-    List ALL chapters and their major topics in a structured JSON format with a top-level 'chapters' key. For each chapter, include:
-    - Chapter name (as 'name'), exactly matching the official textbook titles
-    - List of super important topics (key concepts emphasized in exams, as 'topics')
-    - List of subtopics for each topic (as 'subtopics'), if applicable
-    Exclude topics marked for activities/projects or less emphasized in recent exams.
-    Return only the JSON object, without any Markdown or code block formatting.
-    Example: {{"chapters": [{{"name": "Chapter Name", "topics": [{{"name": "Topic 1", "subtopics": ["Subtopic 1", "Subtopic 2"]}}, {{"name": "Topic 2", "subtopics": []}}]}}]}}
-    """
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=4000
+        user_prompt = (
+            f"Please write a friendly and motivational performance overview for a student named {student_name}.\n"
+            f"The worksheet topic was: {topic}.\n"
+            f"Here are the questions they answered incorrectly:\n{feedback_summary}\n\n"
+            f"Please explain the core concepts behind the correct answers in a simple and patient way. "
+            f"Keep the entire overview concise and encouraging."
+            f"Synthesize this into a cohesive summary. Acknowledge their effort, praise what they did well, and gently point out any patterns in their mistakes (e.g., spelling, specific concepts). Keep it encouraging."
         )
-        content = response.choices[0].message.content.strip()
-        syllabus = json.loads(content)
-        return syllabus if isinstance(syllabus, dict) and 'chapters' in syllabus else {"chapters": []}
-    except Exception as e:
-        logger.error(f"Error fetching syllabus: {e}")
-        return {"chapters": []}
-
-async def generate_quick_topics(board: str, class_num: int, subject: str, db=Depends(get_db)) -> List[dict]:
-    try:
-        cached_syllabus = await db.fetchrow(
-            "SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
-            board, class_num, subject
-        )
-        if not cached_syllabus:
-            syllabus = get_syllabus_from_openai(board, class_num, subject)
-            await db.execute(
-                "INSERT INTO syllabus_cache (board, class_num, subject, syllabus_data) VALUES ($1, $2, $3, $4)",
-                board, class_num, subject, syllabus
-            )
-        else:
-            syllabus = cached_syllabus["syllabus_data"]
-        
-        topics = []
-        for chapter in syllabus.get("chapters", []):
-            for topic in chapter.get("topics", []):
-                topics.append({
-                    "text": f"Explain {topic['name']}",
-                    "subject": subject,
-                    "chapter": chapter["name"]
-                })
-        
-        # Select up to 6 random topics for variety
-        return random.sample(topics, min(6, len(topics))) if topics else []
-    except Exception as e:
-        logger.error(f"Error generating quick topics: {str(e)}")
-        return []
-
-
-def create_quiz_from_openai(board: str, class_num: int, subject: str, chapters: List[dict], level: str) -> List[dict]:
-    chapter_names = [chapter['name'] for chapter in chapters]
-    prompt = f"""
-    {SYSTEM_PROMPT}
-    Create a quiz for {board} Class {class_num} {subject} with exactly one multiple-choice question per chapter, covering the following chapters: {', '.join(chapter_names)}.
-    The quiz should be at {level} level (beginner, intermediate, or advanced) based on the student's previous performance.
-    Each question must:
-    - Be derived strictly from the official textbook syllabus (NCERT for CBSE, SCERT Telangana for BSE Telangana, CISCE for ICSE/ISC).
-    - Cover a key concept from the specified chapter, ensuring all chapters are represented.
-    - Have 4 multiple-choice options.
-    - Include the correct answer and the chapter it corresponds to.
-    Return a JSON list of questions in the format:
-    [{{"question": "Sample question?", "options": ["Option 1", "Option 2", "Option 3", "Option 4"], "answer": "Option 1", "chapter": "Chapter Name"}}]
-    Return only the JSON list, without any Markdown or code block formatting.
-    """
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=4000
-        )
-        content = response.choices[0].message.content.strip()
-        quiz = json.loads(content)
-        return quiz if isinstance(quiz, list) else []
-    except Exception as e:
-        logger.error(f"Error creating quiz: {e}")
-        return []
-
-def explain_topic_with_openai(board: str, class_num: int, subject: str, chapter: str, topic: str) -> str:
-    prompt = f"""
-    {SYSTEM_PROMPT}
-    Explain the concept '{topic}' for {board} Class {class_num} {subject} as per the official curriculum (NCERT for CBSE, SCERT Telangana for BSE Telangana, CISCE for ICSE/ISC).
-    Frame the explanation as part of a story-based quest called "Conquer {topic} Quest" to engage the student.
-    Follow the four-part structure:
-    1. Start with a detailed, engaging real-life example that illustrates the concept, integrated into the quest narrative.
-    2. Provide the textbook definition or explanation, including any formulas or key notes, presented as a discovery in the quest.
-    3. Include a detailed additional example aligned with the textbook style, continuing the quest narrative.
-    4. End with an understanding check: "Does this make sense, or should I explain it another way?" followed by a short, syllabus-based quiz question framed as a quest challenge.
-    Return only the explanation text, without any Markdown or code block formatting.
-    """
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=1000
+    
+        # Use a direct text-based generation for this narrative response
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         )
         return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"Error explaining topic: {e}")
-        return f"Error explaining {topic}. Please try again."
 
-def sanitize_college_name(name: str) -> str:
-    return re.split(r',', name)[0].strip()
+    def _get_json_response(self, system_prompt: str, user_prompt: str) -> dict:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7,
+            )
+            content = response.choices[0].message.content
+            return json.loads(content)
+        except Exception as e:
+            st.error(f"An API or JSON parsing error occurred: {e}")
+            return {}
 
-# Routes
-@app.post("/api/auth/register")
-async def signup(user: UserCreate, db=Depends(get_db)):
-    logger.info(f"Attempting registration for email: {user.email}")
-    try:
-        dob_date = datetime.strptime(user.dob, "%Y-%m-%d").date()
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid DOB format, use YYYY-MM-DD")
-    today = datetime.utcnow()
-    age = today.year - dob_date.year - ((today.month, today.day) < (dob_date.month, dob_date.day))
-    if age < 18 and user.parentMobile is None:
-        raise HTTPException(status_code=422, detail="Parent mobile number is required for users under 18")
-    hashed_password = pwd_context.hash(user.password)
-    try:
-        await db.execute(
-            "INSERT INTO users (first_name, middle_name, last_name, email, password, dob, is_onboarding_complete, mobile, parent_mobile) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            user.firstName, user.middleName, user.lastName, user.email, hashed_password, dob_date, user.isOnboardingComplete, user.mobile, user.parentMobile
-        )
-        access_token = jwt.encode(
-            {"sub": user.email, "type": "user", "exp": datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)},
-            SECRET_KEY,
-            algorithm=ALGORITHM
-        )
-        logger.info(f"Registration successful for email: {user.email}")
-        return {"access_token": access_token, "token_type": "bearer", "user": {
-            "firstName": user.firstName,
-            "middleName": user.middleName,
-            "lastName": user.lastName,
-            "email": user.email,
-            "dob": user.dob,
-            "isOnboardingComplete": user.isOnboardingComplete,
-            "mobile": user.mobile,
-            "parentMobile": user.parentMobile
-        }}
-    except asyncpg.exceptions.UniqueViolationError:
-        logger.warning(f"Email already exists: {user.email}")
-        raise HTTPException(status_code=422, detail="Email already exists")
-    except Exception as e:
-        logger.error(f"Database error during registration: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"Failed to create user: {str(e)}")
-
-@app.post("/api/login")
-async def login(user: UserLogin, db=Depends(get_db)):
-    logger.info(f"Attempting login for email: {user.email}")
-    
-    # Check users table
-    db_user = await db.fetchrow("SELECT * FROM users WHERE email = $1 AND is_active = TRUE", user.email)
-    if db_user and pwd_context.verify(user.password, db_user["password"]):
-        logger.info(f"User login successful for email: {user.email}")
-        access_token = jwt.encode(
-            {"sub": user.email, "type": "user", "exp": datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)},
-            SECRET_KEY,
-            algorithm=ALGORITHM
-        )
-        await db.execute(
-            "UPDATE users SET last_login = $1 WHERE email = $2",
-            datetime.utcnow(),
-            user.email
-        )
-        return {"access_token": access_token, "token_type": "bearer", "type": "user", "user": {
-            "id": db_user["id"],
-            "firstName": db_user["first_name"],
-            "middleName": db_user["middle_name"],
-            "lastName": db_user["last_name"],
-            "email": db_user["email"],
-            "dob": db_user["dob"].isoformat(),
-            "isOnboardingComplete": db_user["is_onboarding_complete"],
-            "mobile": db_user["mobile"],
-            "parentMobile": db_user["parent_mobile"],
-            "userType": db_user["user_type"],
-            "schoolOrCollege": db_user["school_or_college"],
-            "schoolName": db_user["school_name"],
-            "collegeName": db_user["college_name"],
-            "course": db_user["course"],
-            "class": db_user["class"],
-            "board": db_user["board"],
-            "stateBoard": db_user["state_board"],
-            "stream": db_user["stream"],
-            "subStream": db_user["sub_stream"],
-            "goal": db_user["goal"],
-            "childUsername": db_user["child_username"],
-            "avatar": db_user["avatar"],
-            "notificationsEnabled": db_user["notifications_enabled"],
-            "createdAt": db_user["created_at"].isoformat(),
-            "updatedAt": db_user["updated_at"].isoformat(),
-            "lastLogin": db_user["last_login"].isoformat() if db_user["last_login"] else None,
-            "isActive": db_user["is_active"]
-        }}
-    
-    # Check institutes table
-    db_institute = await db.fetchrow("SELECT * FROM institutes WHERE email = $1", user.email)
-    if db_institute and pwd_context.verify(user.password, db_institute["password"]):
-        logger.info(f"Institute login successful for email: {user.email}")
-        access_token = jwt.encode(
-            {"sub": user.email, "type": "institute", "exp": datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)},
-            SECRET_KEY,
-            algorithm=ALGORITHM
-        )
-        return {"access_token": access_token, "token_type": "bearer", "type": "institute", "institute": {
-            "id": db_institute["id"],
-            "name": db_institute["name"],
-            "email": db_institute["email"],
-            "address": db_institute["address"],
-            "contact": db_institute["contact"],
-            "website": db_institute["website"],
-            "logo": db_institute["logo"],
-            "description": db_institute["description"],
-            "established_year": db_institute["established_year"],
-            "affiliations": db_institute["affiliations"],
-            "courses_offered": db_institute["courses_offered"]
-        }}
-    
-    logger.warning(f"Login failed for email: {user.email}")
-    raise HTTPException(status_code=401, detail="Invalid credentials")
-
-@app.patch("/api/institute/update")
-async def update_institute(institute: InstituteUpdate, db=Depends(get_db), current_institute=Depends(get_current_institute)):
-    try:
-        query = """
-        UPDATE institutes 
-        SET 
-            name = COALESCE($1, name),
-            password = COALESCE($2, password),
-            address = COALESCE($3, address),
-            contact = COALESCE($4, contact),
-            email = COALESCE($5, email),
-            website = COALESCE($6, website),
-            logo = COALESCE($7, logo),
-            description = COALESCE($8, description),
-            established_year = COALESCE($9, established_year),
-            affiliations = COALESCE($10, affiliations),
-            courses_offered = COALESCE($11, courses_offered),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = $12
-        RETURNING *
+    def generate_mixed_worksheet(self, standard: str, board: str, subject: str, topic: str, difficulty: str, num_questions: int) -> dict:
         """
-        hashed_password = pwd_context.hash(institute.password) if institute.password else None
-        logger.info(f"Updating institute with id: {current_institute['id']}, payload: {institute.dict()}")
-        updated_institute = await db.fetchrow(
-            query,
-            institute.name,
-            hashed_password,
-            institute.address,
-            institute.contact,
-            institute.email,
-            institute.website,
-            institute.logo,
-            institute.description,
-            institute.established_year,
-            institute.affiliations,
-            institute.courses_offered,
-            current_institute["id"]
+        Generates a worksheet with a mix of question types and a structured answer key.
+        """
+        system_prompt = (
+            "You are an expert curriculum designer for the Indian education system. "
+            "Your task is to generate a well-structured worksheet in JSON format. The root of the JSON object must be a key 'worksheet' which contains a list of question objects. "
+            "Each question object must have three keys: 'type' (can be 'mcq', 'fill_in_the_blank', or 'short_answer'), 'question' (the question text), and 'answer' (the correct answer). "
+            "The questions should me based on users standard and specific chosen board syllabus to the defined topic"
+            "Do not generate questions out of users syllabus."
+            "For 'mcq' questions, you must also include an 'options' key, which is a list of 4 strings. "
+            "For 'fill_in_the_blank' questions, use '____' to indicate the blank."
         )
-        if not updated_institute:
-            logger.error("No institute updated, possibly due to invalid id or database issue")
-            raise HTTPException(status_code=404, detail="Institute not found")
-        return {
-            "message": "Institute updated successfully",
-            "institute": {
-                "id": updated_institute["id"],
-                "name": updated_institute["name"],
-                "email": updated_institute["email"],
-                "address": updated_institute["address"],
-                "contact": updated_institute["contact"],
-                "website": updated_institute["website"],
-                "logo": updated_institute["logo"],
-                "description": updated_institute["description"],
-                "established_year": updated_institute["established_year"],
-                "affiliations": updated_institute["affiliations"],
-                "courses_offered": updated_institute["courses_offered"]
+        user_prompt = (
+            f"Please generate a worksheet with a total of {num_questions} questions for a student in **Class {standard}** of the **{board}** board, studying **{subject}**.\n"
+            f"The specific topic is **'{topic}'**.\n"
+            f"The difficulty level should be **{difficulty}**.\n"
+            f"The questions should be a mix of Multiple Choice (MCQs), Fill-in-the-blanks, and Short Answer questions. "
+            f"Ensure the generated content is a single, valid JSON object."
+        )
+        return self._get_json_response(system_prompt, user_prompt)
+
+    # The adaptive test generator from the previous script can remain here if needed
+    def generate_adaptive_worksheet(self, standard: str, board: str, subject: str, topic: str, difficulty: str, num_questions: int, performance_summary: str) -> dict:
+        """
+        Generates an adaptive worksheet based on student's past performance, with a mix of question types and a structured answer key.
+        """
+        system_prompt = (
+            "You are an expert curriculum designer for the Indian education system. "
+            "Your task is to generate a well-structured worksheet in JSON format. The root of the JSON object must be a key 'worksheet' which contains a list of question objects. "
+            "Each question object must have three keys: 'type' (can be 'mcq', 'fill_in_the_blank', or 'short_answer'), 'question' (the question text), and 'answer' (the correct answer). "
+            "The questions should be based on user's standard and specific chosen board syllabus to the defined topic. "
+            "Do not generate questions out of user's syllabus. "
+            "For 'mcq' questions, you must also include an 'options' key, which is a list of 4 strings. "
+            "For 'fill_in_the_blank' questions, use '____' to indicate the blank."
+        )
+        user_prompt = (
+            f"Please generate an adaptive worksheet with a total of {num_questions} questions for a student in **Class {standard}** of the **{board}** board, studying **{subject}**.\n"
+            f"The specific topic is **'{topic}'**.\n"
+            f"The difficulty level should be **{difficulty}**.\n"
+            f"The questions should be a mix of Multiple Choice (MCQs), Fill-in-the-blanks, and Short Answer questions. "
+            f"Adapt the questions based on the student's past performance, focusing on areas of weakness where relevant:\n{performance_summary}\n"
+            f"Ensure the generated content is a single, valid JSON object."
+        )
+        return self._get_json_response(system_prompt, user_prompt)
+    
+    def get_semantic_grade_and_feedback(self, question: str, student_answer: str, correct_answer: str) -> dict:
+        """
+        Uses the LLM to grade a single answer based on semantic similarity.
+        Returns True if the answer is correct, False otherwise.
+        """
+        system_prompt = (
+            "You are a strict but fair grading assistant. Evaluate if a student's answer is semantically correct. "
+            "If the core concept is wrong (e.g., 'Pythagoras' instead of 'hypotenuse'), it is 'Incorrect'. "
+            "If the answer is correct but has minor issues (like spelling), grade it as 'Correct' but mention the issue in the feedback. "
+            "Your response MUST be a JSON object with two keys: 'grade' (a single word: 'Correct' or 'Incorrect') and 'feedback' (a single, concise sentence of feedback)."
+        )
+        user_prompt = (
+            f"Evaluate this answer:\n\n"
+            f"Question: \"{question}\"\n"
+            f"Student's Answer: \"{student_answer}\"\n"
+            f"Model Correct Answer: \"{correct_answer}\"\n\n"
+            f"Is the student's core answer semantically correct? Provide your response in the specified JSON format."
+        )
+        return self._get_json_response(system_prompt, user_prompt)
+    
+
+    # Add this new method inside the AITeacherAssistant class
+    def validate_topic_for_subject(self, standard: str, board: str, subject: str, topic: str) -> bool:
+        """
+        Uses the LLM to quickly validate if a topic is relevant for a given subject.
+        Returns True if valid, False otherwise.
+        """
+        system_prompt = (
+            "You are a validation assistant for an educational app. Your job is to check if a topic is relevant to a subject "
+            "for a specific grade and board in the Indian education system. Your response MUST be a single word: either 'Valid' or 'Invalid'."
+        )
+        user_prompt = (
+            f"For a student in **Class {standard}** of the **{board}** board, is the topic **'{topic}'** a valid and relevant part of the **'{subject}'** curriculum? Respond with only 'Valid' or 'Invalid'."
+            f"For example, 'Photosynthesis' is 'Valid' for 'Science', but 'Triangles' is 'Invalid' for 'Science'. "
+            f"Respond with only 'Valid' or 'Invalid'."
+        )
+    
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                temperature=0.0,
+            )
+            ai_verdict = response.choices[0].message.content.strip()
+            # Stricter check for an exact match
+            return ai_verdict.lower() == "valid"
+        except Exception:
+            return False
+        
+    # Add these two new methods inside the AITeacherAssistant class
+
+    def generate_class_remediation_plan(self, topic: str, error_count: int, student_count: int) -> str:
+        """
+        Generates remediation suggestions for a topic the entire class is struggling with.
+        """
+        system_prompt = (
+            "You are an expert educational strategist and AI curriculum advisor. Your task is to provide actionable, clear, and "
+            "concise remediation suggestions for a teacher. Focus on practical steps a teacher can take to help students improve."
+        )
+        user_prompt = (
+            f"A significant portion of my class is struggling with the topic: '{topic}'.\n"
+            f"Specifically, {error_count} errors were recorded across {student_count} students on this topic.\n\n"
+            "Please provide a bulleted list of 3-4 actionable remediation suggestions. These could include:\n"
+            "- A suggestion for a focused review session.\n"
+            "- An idea for a different type of activity (e.g., group work, visual aids).\n"
+            "- A recommendation to generate a targeted practice worksheet on this specific topic.\n\n"
+            "Keep the suggestions practical and easy for a teacher to implement."
+        )
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        )
+        return response.choices[0].message.content.strip()
+
+    def generate_student_remediation_plan(self, student_name: str, performance_summary: str) -> str:
+        """
+        Generates a personalized remediation plan for an at-risk student.
+        """
+        system_prompt = (
+            "You are a compassionate and insightful AI guidance counselor for students. Your goal is to create a personalized "
+            "and encouraging remediation plan for a student who is struggling. Address the teacher, but frame the advice around "
+            "helping the student. The tone should be supportive and constructive, not punitive."
+        )
+        user_prompt = (
+            f"I'm concerned about a student named {student_name}. I need a personalized remediation plan.\n\n"
+            f"Here is a summary of their recent performance:\n{performance_summary}\n\n"
+            f"Please provide a short, actionable plan with 2-3 steps. The plan should include:\n"
+            "1. A specific conceptual area to review with the student.\n"
+            "2. A suggestion for a targeted activity or practice worksheet.\n"
+            "3. An encouraging closing remark about building the student's confidence.\n\n"
+            f"Focus on helping {student_name} get back on track."
+        )
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        )
+        return response.choices[0].message.content.strip()
+
+
+
+# ==============================================================================
+# Streamlit UI Views
+# ==============================================================================
+
+@st.cache_resource
+def get_ai_assistant():
+    return AITeacherAssistant()
+
+# Helper function to avoid repeating the feedback display logic
+def _display_feedback_results(feedback_data: dict):
+    """Renders the feedback section for a student's submission."""
+    ai_overview = feedback_data.get("ai_overview")
+    incorrect_answers_report = feedback_data.get("feedback_report")
+
+    if ai_overview:
+        st.info(f"**💡 AI Tutor Overview:**\n\n{ai_overview}")
+
+    if not incorrect_answers_report:
+        st.success("🎉 **Excellent work! All your answers were correct!**")
+    else:
+        st.warning("Here are the corrections for the questions you missed:")
+        for item in incorrect_answers_report:
+            st.markdown("---")
+            st.markdown(f"**Question:** {item['question']}")
+            st.error(f"**Your Answer:** {item['your_answer']}")
+            st.info(f"**Correct Answer:** {item['correct_answer']} \n\n*AI Feedback: {item['ai_feedback']}*")
+
+# --- [REFACTORED] This is the new worksheet-taking view (Phase 3) ---
+def render_worksheet_taker_view(assignment_id: str, student: dict, ai_assistant: AITeacherAssistant):
+    """
+    Renders the worksheet for a logged-in student for a specific assignment.
+    This replaces the old link-based render_student_view.
+    """
+    st.title("✍️ Complete Your Assignment")
+    
+    # Load all DBs
+    assignments = load_db(ASSIGNMENTS_DB)
+    worksheets = load_db(WORKSHEETS_DB)
+    submissions = load_db(SUBMISSIONS_DB)
+
+    assignment = assignments.get(assignment_id)
+    if not assignment:
+        st.error("Assignment not found.")
+        return
+
+    worksheet_data = worksheets.get(assignment["worksheet_id"])
+    if not worksheet_data:
+        st.error("Worksheet data associated with this assignment is missing.")
+        return
+
+    st.header(f"Topic: {worksheet_data.get('topic', 'N/A')}")
+    st.caption(f"Subject: {worksheet_data.get('subject')} | Due Date: {assignment.get('due_date')}")
+    st.markdown("---")
+
+    # Check for existing submission. This is the new re-submission prevention.
+    existing_submission = None
+    for sub_id, sub_data in submissions.items():
+        if sub_data.get("assignment_id") == assignment_id and sub_data.get("student_id") == student["student_id"]:
+            existing_submission = sub_data
+            break
+
+    # --- State 1: Worksheet has been submitted ---
+    if existing_submission:
+        st.success("✨ **You have already submitted this assignment!**")
+        st.info("Your feedback is shown below.")
+        
+        _display_feedback_results({
+            "ai_overview": existing_submission.get("ai_overview"),
+            "feedback_report": existing_submission.get("feedback")
+        })
+        
+        # Add a button to go back to the dashboard
+        if st.button("← Back to Dashboard"):
+            del st.session_state.viewing_assignment_id
+            st.rerun()
+        return
+
+    # --- State 2: Worksheet NOT submitted yet. Log start time. ---
+    if "assignment_start_time" not in st.session_state:
+        st.session_state.assignment_start_time = pd.Timestamp.now().isoformat()
+
+    worksheet_questions = worksheet_data.get("worksheet", [])
+
+    with st.form("submission_form"):
+        st.info(f"Welcome, {student['name']}! Please complete all questions and submit.")
+        student_answers = {}
+        
+        for i, q in enumerate(worksheet_questions):
+            q_key = f"q_{i}"
+            if q['type'] == 'mcq':
+                student_answers[q_key] = st.radio(f"**{i+1}. {q['question']}**", options=q['options'], index=None, key=q_key)
+            elif q['type'] == 'fill_in_the_blank':
+                student_answers[q_key] = st.text_input(f"**{i+1}. {q['question']}**", key=q_key)
+            elif q['type'] == 'short_answer':
+                student_answers[q_key] = st.text_area(f"**{i+1}. {q['question']}**", key=q_key)
+        
+        submitted = st.form_submit_button("Submit & Get Feedback")
+
+    if submitted:
+        with st.spinner("AI is carefully grading your answers... Hang tight!"):
+            all_feedback_for_overview = []
+            incorrect_answers_report = []
+            total_questions = len(worksheet_questions)
+            
+            for i, q in enumerate(worksheet_questions):
+                grade_result = ai_assistant.get_semantic_grade_and_feedback(
+                    question=q['question'],
+                    student_answer=str(student_answers.get(f"q_{i}", "")),
+                    correct_answer=q['answer']
+                )
+                
+                is_correct = grade_result.get("grade", "Incorrect").lower() == "correct"
+                feedback_text = grade_result.get("feedback", "Could not evaluate.")
+                all_feedback_for_overview.append({"question": q['question'], "feedback": feedback_text})
+                
+                if not is_correct:
+                    incorrect_answers_report.append({
+                        "question": q['question'],
+                        "your_answer": str(student_answers.get(f"q_{i}", "")),
+                        "correct_answer": q['answer'],
+                        "ai_feedback": feedback_text
+                    })
+
+            ai_overview = ai_assistant.generate_performance_overview(
+                student_name=student['name'], topic=worksheet_data['topic'], all_feedback=all_feedback_for_overview
+            )
+            
+            incorrect_count = len(incorrect_answers_report)
+            score_percent = ((total_questions - incorrect_count) / total_questions) * 100 if total_questions > 0 else 0
+            
+            # Save to new submission schema
+            submission_id = str(uuid.uuid4())
+            submissions[submission_id] = {
+                "worksheet_id": assignment["worksheet_id"],
+                "assignment_id": assignment_id,
+                "student_id": student["student_id"],
+                "student_name": student["name"], # Denormalize for easier reading in dashboard
+                "topic": worksheet_data.get('topic'),
+                "answers": student_answers,
+                "feedback": incorrect_answers_report,
+                "score_percent": score_percent,
+                "ai_overview": ai_overview,
+                "start_time": st.session_state.assignment_start_time,
+                "submitted_at": pd.Timestamp.now().isoformat()
             }
-        }
-    except Exception as e:
-        logger.error(f"Error updating institute: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to update institute: {str(e)}")
+            save_db(submissions, SUBMISSIONS_DB)
 
-@app.patch("/api/users/me")
-async def update_user(user: UserUpdate, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        query = """
-        UPDATE users 
-        SET 
-            user_type = COALESCE($1, user_type),
-            school_or_college = COALESCE($2, school_or_college),
-            school_name = COALESCE($3, school_name),
-            college_name = COALESCE($4, college_name),
-            course = COALESCE($5, course),
-            class = COALESCE($6, class),
-            board = COALESCE($7, board),
-            state_board = COALESCE($8, state_board),
-            stream = COALESCE($9, stream),
-            sub_stream = COALESCE($10, sub_stream),
-            goal = COALESCE($11, goal),
-            child_username = COALESCE($12, child_username),
-            avatar = COALESCE($13, avatar),
-            is_onboarding_complete = COALESCE($14, is_onboarding_complete),
-            email = COALESCE($15, email),
-            password = COALESCE($16, password),
-            notifications_enabled = COALESCE($17, notifications_enabled),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE email = $18
-        RETURNING *
-        """
-        hashed_password = pwd_context.hash(user.password) if user.password else None
-        logger.info(f"Updating user with email: {current_user['email']}, payload: {user.dict()}")
-        updated_user = await db.fetchrow(
-            query,
-            user.userType,
-            user.schoolOrCollege,
-            user.schoolName,
-            user.collegeName,
-            user.course,
-            user.className,
-            user.board,
-            user.stateBoard,
-            user.stream,
-            user.subStream,
-            user.goal,
-            user.childUsername,
-            user.avatar,
-            user.isOnboardingComplete,
-            user.email,
-            hashed_password,
-            user.notificationsEnabled,
-            current_user["email"]
-        )
-        if not updated_user:
-            logger.error("No user updated, possibly due to invalid email or database issue")
-            raise HTTPException(status_code=404, detail="User not found")
-        return {
-            "message": "User updated successfully",
-            "user": {
-                "id": updated_user["id"],
-                "firstName": updated_user["first_name"],
-                "middleName": updated_user["middle_name"],
-                "lastName": updated_user["last_name"],
-                "email": updated_user["email"],
-                "dob": updated_user["dob"].isoformat(),
-                "isOnboardingComplete": updated_user["is_onboarding_complete"],
-                "mobile": updated_user["mobile"],
-                "parentMobile": updated_user["parent_mobile"],
-                "userType": updated_user["user_type"],
-                "schoolOrCollege": updated_user["school_or_college"],
-                "schoolName": updated_user["school_name"],
-                "collegeName": updated_user["college_name"],
-                "course": updated_user["course"],
-                "class": updated_user["class"],
-                "board": updated_user["board"],
-                "stateBoard": updated_user["state_board"],
-                "stream": updated_user["stream"],
-                "subStream": updated_user["sub_stream"],
-                "goal": updated_user["goal"],
-                "childUsername": updated_user["child_username"],
-                "avatar": updated_user["avatar"],
-                "notificationsEnabled": updated_user["notifications_enabled"],
-                "createdAt": updated_user["created_at"].isoformat(),
-                "updatedAt": updated_user["updated_at"].isoformat(),
-                "lastLogin": updated_user["last_login"].isoformat() if updated_user["last_login"] else None,
-                "isActive": updated_user["is_active"]
-            }
-        }
-    except Exception as e:
-        logger.error(f"Error updating user: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
-
-@app.get("/api/users/me")
-async def get_profile(db=Depends(get_db), current_user=Depends(get_current_user)):
-    return {"user": {
-        "id": current_user["id"],
-        "firstName": current_user["first_name"],
-        "middleName": current_user["middle_name"],
-        "lastName": current_user["last_name"],
-        "email": current_user["email"],
-        "dob": current_user["dob"].isoformat(),
-        "isOnboardingComplete": current_user["is_onboarding_complete"],
-        "mobile": current_user["mobile"],
-        "parentMobile": current_user["parent_mobile"],
-        "userType": current_user["user_type"],
-        "schoolOrCollege": current_user["school_or_college"],
-        "schoolName": current_user["school_name"],
-        "collegeName": current_user["college_name"],
-        "course": current_user["course"],
-        "class": current_user["class"],
-        "board": current_user["board"],
-        "stateBoard": current_user["state_board"],
-        "stream": current_user["stream"],
-        "subStream": current_user["sub_stream"],
-        "goal": current_user["goal"],
-        "childUsername": current_user["child_username"],
-        "avatar": current_user["avatar"],
-        "notificationsEnabled": current_user["notifications_enabled"],
-        "createdAt": current_user["created_at"].isoformat(),
-        "updatedAt": current_user["updated_at"].isoformat(),
-        "lastLogin": current_user["last_login"].isoformat() if current_user["last_login"] else None,
-        "isActive": current_user["is_active"]
-    }}
-
-@app.get("/api/institute/me")
-async def get_institute_profile(db=Depends(get_db), current_institute=Depends(get_current_institute)):
-    return {"institute": {
-        "id": current_institute["id"],
-        "name": current_institute["name"],
-        "email": current_institute["email"],
-        "address": current_institute["address"],
-        "contact": current_institute["contact"],
-        "website": current_institute["website"],
-        "logo": current_institute["logo"],
-        "description": current_institute["description"],
-        "established_year": current_institute["established_year"],
-        "affiliations": current_institute["affiliations"],
-        "courses_offered": current_institute["courses_offered"]
-    }}
-
-@app.get("/api/colleges")
-async def get_colleges(db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        educational_data = load_educational_data()
-        colleges = [sanitize_college_name(college) for college in educational_data["colleges"].keys()]
-        return {"colleges": colleges}
-    except Exception as e:
-        logger.error(f"Error fetching colleges: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching colleges: {str(e)}")
-
-@app.get("/api/courses/{college_name}")
-async def get_courses(college_name: str, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        sanitized_name = sanitize_college_name(college_name)
-        educational_data = load_educational_data()
-        courses = educational_data["colleges"].get(sanitized_name, [])
-        return {"courses": courses}
-    except Exception as e:
-        logger.error(f"Error fetching courses: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching courses: {str(e)}")
-
-@app.post("/api/colleges/add")
-async def add_college(college: CollegeAdd, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        sanitized_name = sanitize_college_name(college.collegeName)
-        educational_data = load_educational_data()
-        if sanitized_name not in educational_data["colleges"]:
-            educational_data["colleges"][sanitized_name] = []
-        if college.course and college.course not in educational_data["colleges"][sanitized_name]:
-            educational_data["colleges"][sanitized_name].append(college.course)
-        with open('educational_data.json', 'w') as f:
-            json.dump(educational_data, f, indent=2)
-        return {"message": "College and/or course added successfully"}
-    except Exception as e:
-        logger.error(f"Error adding college/course: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error adding college/course: {str(e)}")
-
-@app.get("/api/boards")
-async def get_boards(class_name: Optional[str] = None, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        state_boards = load_state_boards()
-        if class_name in ['11', '12']:
-            boards = [board["board_name"] for board in state_boards["higher_secondary_boards"]]
-        else:
-            boards = [board["board_name"] for board in state_boards["secondary_boards"]]
-        return {"boards": boards}
-    except Exception as e:
-        logger.error(f"Error fetching boards: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching boards: {str(e)}")
-
-@app.get("/api/state-boards")
-async def get_state_boards(class_name: Optional[str] = None, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        state_boards = load_state_boards()
-        if class_name in ['11', '12']:
-            boards = [board["board_name"] for board in state_boards["higher_secondary_boards"]]
-        else:
-            boards = [board["board_name"] for board in state_boards["secondary_boards"]]
-        return {"stateBoards": boards}
-    except Exception as e:
-        logger.error(f"Error fetching state boards: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching state boards: {str(e)}")
+            # Clean up session state
+            del st.session_state.assignment_start_time
+            st.balloons()
+            st.rerun() # This will rerun, hit the "existing_submission" block, and show feedback
 
 
-
-
-@app.get("/api/subjects/{board}/{class_num}")
-async def get_subjects(board: str, class_num: int, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        # Load subjects from JSON file
-        subject_cache = load_subject_cache()
-        key = f"{board}_{class_num}"
-        subjects = subject_cache.get(key, [])
-        if not subjects:
-            # Fallback to OpenAI if not found in JSON
-            subjects = get_subjects_from_openai(board, class_num)
-            if not subjects:
-                raise HTTPException(status_code=404, detail="No subjects found for the specified board and class")
-            # Optionally, update the JSON file with new data
-            subject_cache[key] = subjects
-            with open('subject_cache.json', 'w') as f:
-                json.dump(subject_cache, f, indent=2)
-        return {"subjects": subjects}
-    except Exception as e:
-        logger.error(f"Error fetching subjects: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching subjects: {str(e)}")
-
-@app.get("/api/syllabus/{board}/{class_num}/{subject}")
-async def get_syllabus(board: str, class_num: int, subject: str, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        cached = await db.fetchrow("SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3", board, class_num, subject)
-        if cached and cached["syllabus_data"]:
-            return {"syllabus": cached["syllabus_data"]}
-        syllabus = get_syllabus_from_openai(board, class_num, subject)
-        await db.execute(
-            "INSERT INTO syllabus_cache (board, class_num, subject, syllabus_data) VALUES ($1, $2, $3, $4)",
-            board, class_num, subject, syllabus
-        )
-        return {"syllabus": syllabus}
-    except Exception as e:
-        logger.error(f"Error getting syllabus: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting syllabus: {str(e)}")
-
-@app.post("/api/quiz/initial")
-async def create_initial_quiz(quiz_request: QuizRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        cached_syllabus = await db.fetchrow("SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3", quiz_request.board, quiz_request.classNum, quiz_request.subject)
-        if not cached_syllabus:
-            raise HTTPException(status_code=404, detail="Syllabus not found")
-        chapters = cached_syllabus["syllabus_data"].get("chapters", [])
-        quiz = create_quiz_from_openai(quiz_request.board, quiz_request.classNum, quiz_request.subject, chapters, quiz_request.level)
-        return {"quiz": quiz}
-    except Exception as e:
-        logger.error(f"Failed to create quiz: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to create quiz: {str(e)}")
-
-@app.post("/api/study-plan/generate")
-async def generate_study_plan(plan_request: StudyPlanRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        user_id = current_user["id"]
-        mock_plan = {
-            "Week 1": [
-                {
-                    "date": "2025-09-06",
-                    "chapter": plan_request.subject,
-                    "topic": "Linear Equations",
-                    "subtopic": "Solving Linear Equations",
-                    "time": 2.0,
-                    "completed": False
-                }
-            ]
-        }
-        await db.execute(
-            "INSERT INTO study_plan (user_id, subject, plan_data, weak_chapters) VALUES ($1, $2, $3, $4)",
-            user_id, plan_request.subject, mock_plan, plan_request.weakChapters
-        )
-        return {"studyPlan": mock_plan}
-    except Exception as e:
-        logger.error(f"Failed to generate study plan: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate study plan: {str(e)}")
-
-@app.post("/api/tutor/explain")
-async def explain_topic(explain_request: ExplainRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        explanation = explain_topic_with_openai(explain_request.board, explain_request.classNum, explain_request.subject, explain_request.chapter, explain_request.topic)
-        return {"explanation": explanation, "image": None}
-    except Exception as e:
-        logger.error(f"Failed to explain topic: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to explain topic: {str(e)}")
-
-@app.get("/api/institute/performance")
-async def get_institute_performance(db=Depends(get_db), current_institute=Depends(get_current_institute)):
-    institute_id = current_institute["id"]
-    performance = {
-        "student_count": await db.fetchval(
-            "SELECT COUNT(*) FROM user_institute_mapping m JOIN users u ON m.user_id = u.id WHERE m.institute_id = $1 AND u.user_type = 'student'",
-            institute_id
-        ),
-        "teacher_count": await db.fetchval(
-            "SELECT COUNT(*) FROM user_institute_mapping m JOIN users u ON m.user_id = u.id WHERE m.institute_id = $1 AND u.user_type = 'teacher'",
-            institute_id
-        ),
-        "avg_performance_score": await db.fetchval(
-            "SELECT AVG(performance_score) FROM performance WHERE institute_id = $1 AND user_type = 'student'",
-            institute_id
-        ) or 0.0,
-        "section_wise": await db.fetch(
-            "SELECT section, AVG(performance_score) as avg_score FROM performance WHERE institute_id = $1 AND user_type = 'student' GROUP BY section",
-            institute_id
-        ),
-        "class_wise": await db.fetch(
-            "SELECT class, AVG(performance_score) as avg_score FROM performance WHERE institute_id = $1 AND user_type = 'student' GROUP BY class",
-            institute_id
-        ),
-        "individual_students": await db.fetch(
-            "SELECT u.first_name, u.last_name, p.performance_score FROM users u JOIN performance p ON u.id = p.user_id WHERE p.institute_id = $1 AND u.user_type = 'student'",
-            institute_id
-        )
-    }
-    return performance
-
-
-@app.get("/api/progress")
-async def get_progress(subject: Optional[str] = None, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        user_id = current_user["id"]
-        query = """
-        SELECT subject, overall_score, progress, completed_topics, total_topics, 
-               mock_tests_taken, total_mock_tests, study_hours, percentile, 
-               weak_areas, last_activity, trend
-        FROM subject_performances
-        WHERE user_id = $1
-        """
-        params = [user_id]
-        
-        if subject:
-            query += " AND subject = $2"
-            params.append(subject)
-
-        performances = await db.fetch(query, *params)
-        
-        # Convert database rows to the expected response format
-        response = [{
-            "subject": row["subject"],
-            "overallScore": row["overall_score"],
-            "progress": row["progress"],
-            "completedTopics": row["completed_topics"],
-            "totalTopics": row["total_topics"],
-            "mockTestsTaken": row["mock_tests_taken"],
-            "totalMockTests": row["total_mock_tests"],
-            "studyHours": row["study_hours"],
-            "percentile": row["percentile"],
-            "weakAreas": row["weak_areas"],
-            "lastActivity": row["last_activity"].isoformat() if row["last_activity"] else None,
-            "trend": row["trend"]
-        } for row in performances]
-        
-        return {"performances": response}
-    except Exception as e:
-        logger.error("Table subject_performances does not exist")
-        raise HTTPException(status_code=500, detail="Progress tracking is not set up in the database")
-    except Exception as e:
-        logger.error(f"Error fetching progress: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching progress: {str(e)}")
-
-
-@app.get("/api/progress/stats")
-async def get_progress_stats(range: Optional[str] = None, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        user_id = current_user["id"]
-        
-        # Fetch streak, XP, and badges from streaks table
-        streak_data = await db.fetchrow(
-            "SELECT streak, xp, badges FROM streaks WHERE user_id = $1",
-            user_id
-        )
-        streak = streak_data["streak"] if streak_data else 0
-        xp = streak_data["xp"] if streak_data else 0
-        badges = streak_data["badges"] if streak_data and streak_data["badges"] else []
-
-        # Fetch daily goals from daily_goals table
-        goals_data = await db.fetch(
-            "SELECT id, task, completed, xp FROM daily_goals WHERE user_id = $1",
-            user_id
-        )
-        todays_goals = [{
-            "id": row["id"],
-            "task": row["task"],
-            "completed": row["completed"],
-            "xp": row["xp"]
-        } for row in goals_data]
-
-        # Fetch achievements from achievements table
-        achievements_data = await db.fetch(
-            "SELECT id, title, description, icon, xp, earned FROM achievements WHERE user_id = $1",
-            user_id
-        )
-        todays_achievements = [{
-            "id": row["id"],
-            "title": row["title"],
-            "description": row["description"],
-            "icon": row["icon"],
-            "xp": row["xp"],
-            "earned": row["earned"]
-        } for row in achievements_data]
-
-        # Return response in the expected format
-        return {
-            "streak": streak,
-            "xp": xp,
-            "badges": badges,
-            "todaysGoals": todays_goals,
-            "todaysAchievements": todays_achievements
-        }
-    except Exception as e:
-        logger.error(f"Error fetching stats: {str(e)}")
-        return {
-            "streak": 0,
-            "xp": 0,
-            "badges": [],
-            "todaysGoals": [],
-            "todaysAchievements": []
-        }
-    except Exception as e:
-        logger.error(f"Error fetching stats: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching stats: {str(e)}")
+# --- [NEW] Student Dashboard Function (Phase 3) ---
+def render_student_dashboard(student_data: dict, class_id: str, ai_assistant: AITeacherAssistant):
+    """
+    This is the main dashboard for a logged-in student.
+    It shows their assignments and allows them to take them.
+    """
     
-# Load educational data from JSON files
-def load_educational_data():
-    try:
-        with open('educational_data.json', 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading educational_data.json: {str(e)}")
-        return {"colleges": {}, "stateBoards": []}
+    # Check if student is currently taking a worksheet
+    if "viewing_assignment_id" in st.session_state:
+        render_worksheet_taker_view(st.session_state.viewing_assignment_id, student_data, ai_assistant)
+        return
 
-def load_state_boards():
-    try:
-        with open('state_boards.json', 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading state_boards.json: {str(e)}")
-        return {"secondary_boards": [], "higher_secondary_boards": []}
+    # --- Main Dashboard View ---
+    st.title(f"👋 Welcome, {student_data['name']}!")
 
-# Admin routes
-@app.get("/api/admin/stats")
-async def get_admin_stats(db=Depends(get_db), current_user=Depends(get_current_user)):
-    if current_user["user_type"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    stats = {
-        "students": await db.fetchval("SELECT COUNT(*) FROM users WHERE user_type = 'student'"),
-        "teachers": await db.fetchval("SELECT COUNT(*) FROM users WHERE user_type = 'teacher'"),
-        "parents": await db.fetchval("SELECT COUNT(*) FROM users WHERE user_type = 'parent'"),
-        "schools": await db.fetchval("SELECT COUNT(DISTINCT school_name) FROM users WHERE school_name IS NOT NULL"),
-        "connected_students": await db.fetchval("SELECT COUNT(*) FROM user_institute_mapping")
-    }
-    return stats
+    # Load DBs
+    all_assignments = load_db(ASSIGNMENTS_DB)
+    all_submissions = load_db(SUBMISSIONS_DB)
 
-@app.post("/api/admin/institute")
-async def create_institute(institute: InstituteCreate, db=Depends(get_db), current_user=Depends(get_current_user)):
-    if current_user["user_type"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    try:
-        invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-        institute_id = str(uuid.uuid4())
-        token = secrets.token_hex(32)
-        invite_link = f"https://your-app.com/invite/{invite_code}"
-        hashed_password = pwd_context.hash(institute.password)
-        await db.execute(
-            """
-            INSERT INTO institutes (
-                id, name, password, invite_code, token, invite_link, address, contact, email, website,
-                logo, description, established_year, affiliations, courses_offered
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-            """,
-            institute_id, institute.name, hashed_password, invite_code, token, invite_link,
-            institute.address, institute.contact, institute.email, institute.website,
-            institute.logo, institute.description, institute.established_year,
-            institute.affiliations, institute.courses_offered
+    # Filter assignments for this student's class
+    my_class_assignments = {aid: data for aid, data in all_assignments.items() if data.get('class_id') == class_id}
+    
+    # Get all submission IDs for this student to quickly check completion
+    my_submission_ids = set()
+    for sub_id, sub_data in all_submissions.items():
+        if sub_data.get("student_id") == student_data["student_id"]:
+            my_submission_ids.add(sub_data.get("assignment_id"))
+
+    todo_assignments = []
+    completed_assignments = []
+
+    for aid, adata in my_class_assignments.items():
+        if aid in my_submission_ids:
+            completed_assignments.append(adata)
+        else:
+            todo_assignments.append({"id": aid, **adata}) # Add the ID to the dict
+
+    st.subheader("📬 To-Do Assignments")
+    if not todo_assignments:
+        st.info("Great job! You have no pending assignments.")
+    else:
+        for i, assign in enumerate(todo_assignments):
+            with st.container(border=True):
+                st.markdown(f"**Topic:** {assign.get('topic', 'N/A')}")
+                st.caption(f"Assigned: {assign.get('assigned_date')} | Due: {assign.get('due_date')}")
+                
+                # Use a unique button key
+                if st.button("Start Assignment", key=f"start_{assign['id']}"):
+                    st.session_state.viewing_assignment_id = assign['id']
+                    st.rerun()
+    
+    st.markdown("---")
+    st.subheader("✅ Completed Assignments")
+    if not completed_assignments:
+        st.info("You have not completed any assignments yet.")
+    else:
+        for assign in completed_assignments:
+            with st.container(border=True):
+                st.markdown(f"**Topic:** {assign.get('topic', 'N/A')} (Completed)")
+                st.caption(f"Due: {assign.get('due_date')}")
+                # Future: Could add a button to review submission feedback here
+
+    if st.button("Log Out"):
+        del st.session_state.logged_in_student
+        st.rerun()
+
+
+# --- [NEW] Student Login Portal Function (Phase 2) ---
+def render_student_login_portal():
+    """Renders the main login page for students."""
+    st.title("👨‍🎓 Student Portal Login")
+
+    roster = load_db(CLASS_ROSTER_DB)
+    if not roster:
+        st.error("No classes are set up in the system yet. Please contact your teacher.")
+        return
+
+    # --- Login Form ---
+    with st.form("student_login_form"):
+        # 1. Select Class
+        selected_student_id = None
+        class_options = {cid: data["class_name"] for cid, data in roster.items()}
+        selected_class_id = st.selectbox(
+            "Select Your Class", 
+            options=class_options.keys(), 
+            format_func=lambda cid: class_options[cid],
+            index=None,
+            placeholder="Choose your class..."
         )
-        logger.info(f"Created institute: {institute.name} with ID: {institute_id}")
-        return {
-            "institute_id": institute_id,
-            "name": institute.name,
-            "invite_code": invite_code,
-            "invite_link": invite_link,
-            "address": institute.address,
-            "contact": institute.contact,
-            "email": institute.email,
-            "website": institute.website,
-            "logo": institute.logo,
-            "description": institute.description,
-            "established_year": institute.established_year,
-            "affiliations": institute.affiliations,
-            "courses_offered": institute.courses_offered
-        }
-    except asyncpg.exceptions.UniqueViolationError:
-        logger.warning(f"Invite code or token already exists for institute: {institute.name}")
-        raise HTTPException(status_code=422, detail="Invite code or token already exists")
-    except Exception as e:
-        logger.error(f"Error creating institute: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to create institute: {str(e)}")
 
-@app.get("/api/admin/users", response_model=List[UserResponse])
-async def get_users(db=Depends(get_db), current_user=Depends(get_current_user)):
-    if current_user["user_type"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    users = await db.fetch("""
-        SELECT u.id, u.first_name, u.last_name, u.email, u.user_type, u.school_name, u.college_name,
-               m.institute_id, u.company
-        FROM users u
-        LEFT JOIN user_institute_mapping m ON u.id = m.user_id
-    """)
-    return users
-
-@app.get("/api/admin/institutes", response_model=List[InstituteResponse])
-async def get_institutes(db=Depends(get_db), current_user=Depends(get_current_user)):
-    if current_user["user_type"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    institutes = await db.fetch("""
-        SELECT i.id, i.name,
-               (SELECT COUNT(*) FROM user_institute_mapping m JOIN users u ON m.user_id = u.id
-                WHERE m.institute_id = i.id AND u.user_type = 'student') as student_count,
-               (SELECT COUNT(*) FROM user_institute_mapping m JOIN users u ON m.user_id = u.id
-                WHERE m.institute_id = i.id AND u.user_type = 'teacher') as teacher_count
-        FROM institutes i
-    """)
-    return institutes
-
-
-@app.get("/api/resources")
-async def get_resources(db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        user_id = current_user["id"]
-        user_grade = current_user["class"]
-        if not user_grade:
-            raise HTTPException(status_code=400, detail="User grade not specified")
+        if selected_class_id:
+            # 2. Select Student (dynamically populates based on class)
+            student_options = {s["student_id"]: s["name"] for s in roster[selected_class_id]["students"]}
+            selected_student_id = st.selectbox(
+                "Select Your Name",
+                options=student_options.keys(),
+                format_func=lambda sid: student_options[sid],
+                index=None,
+                placeholder="Find your name..."
+            )
         
-        # Query resources from the database filtered by user's grade
-        resources = await db.fetch(
-            "SELECT id, title, description, type, subject, grade, duration, level, url, thumbnail "
-            "FROM resources WHERE grade = $1 OR grade = 'all'",
-            user_grade
-        )
-        
-        # Convert database rows to Resource model
-        response = [{
-            "id": row["id"],
-            "title": row["title"],
-            "description": row["description"],
-            "type": row["type"],
-            "subject": row["subject"],
-            "grade": row["grade"],
-            "duration": row["duration"],
-            "level": row["level"],
-            "url": row["url"],
-            "thumbnail": row["thumbnail"]
-        } for row in resources]
-        
-        return {"resources": response}
-    except Exception as e:
-        logger.error(f"Error fetching resources: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching resources: {str(e)}")
+        # 3. Enter PIN
+        student_pin = st.text_input("Enter your 4-Digit PIN", type="password", max_chars=4)
 
+        login_button = st.form_submit_button("Login")
 
-@app.post("/api/tutor/chat")
-async def chat_with_tutor(chat_request: ChatRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        user_id = current_user["id"]
-        board = chat_request.board or current_user["board"] or "CBSE"
-        class_num = chat_request.class_num or int(current_user["class"] or 10)
-        subject = chat_request.subject or "Mathematics"
-
-        # Store user message
-        await db.execute(
-            "INSERT INTO chat_history (user_id, role, message, subject, board, class_num) VALUES ($1, $2, $3, $4, $5, $6)",
-            user_id, "user", chat_request.message, subject, board, class_num
-        )
-
-        # Generate response using OpenAI
-        prompt = f"""
-        {SYSTEM_PROMPT}
-        The student has asked: '{chat_request.message}' for {board} Class {class_num} {subject}.
-        Provide a detailed response following the four-part structure:
-        1. Start with a detailed, engaging real-life example that illustrates the concept.
-        2. Provide the textbook definition or explanation, including any formulas or key notes.
-        3. Include a detailed additional example aligned with the textbook style.
-        4. End with an understanding check: "Does this make sense, or should I explain it another way?" followed by a short, syllabus-based quiz question.
-        If the question is not specific to a topic or is outside the syllabus, provide a general response encouraging the student to ask a syllabus-related question.
-        Return only the response text, without any Markdown or code block formatting.
-        """
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=1000
-        )
-        ai_response = response.choices[0].message.content.strip()
-
-        # Store AI response
-        await db.execute(
-            "INSERT INTO chat_history (user_id, role, message, subject, board, class_num) VALUES ($1, $2, $3, $4, $5, $6)",
-            user_id, "assistant", ai_response, subject, board, class_num
-        )
-
-        return {"response": ai_response}
-    except Exception as e:
-        logger.error(f"Error in chat endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing chat: {str(e)}")
-
-
-# Get chat history endpoint
-@app.get("/api/tutor/chat/history")
-async def get_chat_history(db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        user_id = current_user["id"]
-        messages = await db.fetch(
-            """
-            SELECT id, role, message, subject, board, class_num, timestamp, liked
-            FROM chat_history
-            WHERE user_id = $1
-            ORDER BY timestamp ASC
-            """,
-            user_id
-        )
-        return {
-            "messages": [
-                {
-                    "id": msg["id"],
-                    "role": msg["role"],
-                    "message": msg["message"],
-                    "subject": msg["subject"],
-                    "board": msg["board"],
-                    "class_num": msg["class_num"],
-                    "timestamp": msg["timestamp"].isoformat(),
-                    "liked": msg["liked"]
+    if login_button:
+        if not selected_class_id or not selected_student_id or not student_pin:
+            st.error("Please fill out all fields.")
+        else:
+            # --- Authentication Logic ---
+            student_data = None
+            for s in roster[selected_class_id]["students"]:
+                if s["student_id"] == selected_student_id:
+                    student_data = s
+                    break
+            
+            if student_data and student_data["pin"] == student_pin:
+                st.success("Login Successful!")
+                # Store logged in student in session state
+                st.session_state.logged_in_student = {
+                    "student_data": student_data,
+                    "class_id": selected_class_id
                 }
-                for msg in messages
-            ]
-        }
-    except Exception as e:
-        logger.error(f"Error fetching chat history: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching chat history: {str(e)}")
+                st.rerun()
+            else:
+                st.error("Login failed. Check your name and PIN and try again.")
 
-# Update feedback endpoint
-@app.post("/api/tutor/feedback")
-async def update_feedback(feedback: FeedbackRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        user_id = current_user["id"]
-        # Verify the message belongs to the user
-        message = await db.fetchrow(
-            "SELECT user_id FROM chat_history WHERE id = $1",
-            feedback.message_id
-        )
-        if not message or message["user_id"] != user_id:
-            raise HTTPException(status_code=403, detail="Unauthorized to update this message")
+# def render_student_view(worksheet_id: str, ai_assistant: AITeacherAssistant):
+#     """Displays a worksheet for a student, handles submission, and prevents re-submission."""
+#     st.title("✍️ Complete Your Worksheet")
+    
+#     worksheets = load_db(WORKSHEETS_DB)
+#     worksheet_data = worksheets.get(worksheet_id)
+
+#     if not worksheet_data:
+#         st.error("Worksheet not found. Please check the link or contact your teacher.")
+#         return
+
+#     st.header(f"Topic: {worksheet_data.get('topic', 'N/A')}")
+#     st.caption(f"Class: {worksheet_data.get('standard')} | Board: {worksheet_data.get('board')} | Subject: {worksheet_data.get('subject')}")
+#     st.markdown("---")
+    
+#     # Use session state to track submission status for this specific worksheet
+#     submission_state_key = f"submitted_{worksheet_id}"
+#     feedback_state_key = f"feedback_{worksheet_id}"
+
+#     if submission_state_key not in st.session_state:
+#         st.session_state[submission_state_key] = False
+    
+#     # --- State 1: Worksheet has been submitted ---
+#     if st.session_state[submission_state_key]:
+#         st.balloons() # The balloons are back!
+#         st.success("✨ **Your worksheet has been submitted!**")
+#         st.info("You have already completed this worksheet. Your feedback is shown below.")
         
-        await db.execute(
-            "UPDATE chat_history SET liked = $1 WHERE id = $2",
-            feedback.liked, feedback.message_id
-        )
-        return {"message": "Feedback updated successfully"}
-    except Exception as e:
-        logger.error(f"Error updating feedback: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error updating feedback: {str(e)}")
+#         # Display the stored feedback
+#         if feedback_state_key in st.session_state:
+#             _display_feedback_results(st.session_state[feedback_state_key])
+#         return # Stop execution to prevent showing the form again
+
+#     # --- State 2: Worksheet has NOT been submitted yet ---
+#     worksheet_questions = worksheet_data.get("worksheet", [])
+
+#     with st.form("submission_form"):
+#         student_name = st.text_input("Please enter your name")
+#         student_answers = {}
+        
+#         for i, q in enumerate(worksheet_questions):
+#             q_key = f"q_{i}"
+#             if q['type'] == 'mcq':
+#                 student_answers[q_key] = st.radio(f"**{i+1}. {q['question']}**", options=q['options'], index=None, key=q_key)
+#             elif q['type'] == 'fill_in_the_blank':
+#                 student_answers[q_key] = st.text_input(f"**{i+1}. {q['question']}**", key=q_key)
+#             elif q['type'] == 'short_answer':
+#                 student_answers[q_key] = st.text_area(f"**{i+1}. {q['question']}**", key=q_key)
+        
+#         submitted = st.form_submit_button("Submit & Get Feedback")
+
+#     if submitted:
+#         if not student_name.strip():
+#             st.warning("Please enter your name before submitting.")
+#         else:
+#             with st.spinner("AI is carefully grading your answers... Hang tight!"):
+#                 # ... (The entire grading and saving logic remains exactly the same) ...
+#                 all_feedback_for_overview = []
+#                 incorrect_answers_report = []
+#                 total_questions = len(worksheet_questions)
+                
+#                 for i, q in enumerate(worksheet_questions):
+#                     grade_result = ai_assistant.get_semantic_grade_and_feedback(
+#                         question=q['question'],
+#                         student_answer=str(student_answers.get(f"q_{i}", "")),
+#                         correct_answer=q['answer']
+#                     )
+                    
+#                     is_correct = grade_result.get("grade", "Incorrect").lower() == "correct"
+#                     feedback_text = grade_result.get("feedback", "Could not evaluate.")
+#                     all_feedback_for_overview.append({"question": q['question'], "feedback": feedback_text})
+                    
+#                     if not is_correct:
+#                         incorrect_answers_report.append({
+#                             "question": q['question'],
+#                             "your_answer": str(student_answers.get(f"q_{i}", "")),
+#                             "correct_answer": q['answer'],
+#                             "ai_feedback": feedback_text
+#                         })
+
+#                 ai_overview = ai_assistant.generate_performance_overview(
+#                     student_name=student_name, topic=worksheet_data['topic'], all_feedback=all_feedback_for_overview
+#                 )
+                
+#                 incorrect_count = len(incorrect_answers_report)
+#                 score_percent = ((total_questions - incorrect_count) / total_questions) * 100 if total_questions > 0 else 0
+
+#                 submissions = load_db(SUBMISSIONS_DB)
+#                 submission_id = str(uuid.uuid4())
+#                 submissions[submission_id] = {
+#                     "worksheet_id": worksheet_id,
+#                     "student_name": student_name.strip(),
+#                     "topic": worksheet_data.get('topic'),
+#                     "answers": student_answers,
+#                     "feedback": incorrect_answers_report,
+#                     "score_percent": score_percent,
+#                     "ai_overview": ai_overview,
+#                     "submitted_at": pd.Timestamp.now().isoformat()
+#                 }
+#                 save_db(submissions, SUBMISSIONS_DB)
+
+#                 # Store feedback in session state and set submission flag
+#                 st.session_state[feedback_state_key] = {
+#                     "ai_overview": ai_overview,
+#                     "feedback_report": incorrect_answers_report
+#                 }
+#                 st.session_state[submission_state_key] = True
+                
+#                 # Rerun the script to show the "submitted" view
+#                 st.rerun()
+
+def render_teacher_dashboard(ai_assistant):
+    """Displays the main dashboard for the teacher."""
+    st.title("👨‍🏫 Teacher's AI Assistant Dashboard")
+
+    # --- NEW: Initialize session state for the editing workflow ---
+    if 'draft_worksheet' not in st.session_state:
+        st.session_state.draft_worksheet = None
+    if 'finalized_link' not in st.session_state:
+        st.session_state.finalized_link = None
+    if 'confirm_delete_selection' not in st.session_state:
+        st.session_state.confirm_delete_selection = False
+    if 'worksheet_to_assign' not in st.session_state:
+        st.session_state.worksheet_to_assign = None
+        
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Worksheet Generator", "View Submissions", "Student Progress Tracker", "Class Insights", "Class Management"])
+
+# --- Worksheet Generator Tab ---
+    
+    with tab1:
+        st.header("Worksheet Generator")
+        
+        # Add radio button to select worksheet type
+        worksheet_type = st.radio("Select Worksheet Type", ["General Worksheet", "Adaptive Worksheet"], horizontal=True)
+        
+        if worksheet_type == "General Worksheet":
+            st.subheader("Generate General Worksheet")
+            
+            # Hide the generation form if a draft is already being edited
+            if st.session_state.draft_worksheet is None:
+                
+                # Load all unique, normalized topics that have already been assigned
+                # This helps the teacher maintain consistency.
+                assignments_db = load_db(ASSIGNMENTS_DB)
+                existing_topics = sorted(list(set(a['topic'] for a in assignments_db.values())))
+            
+                with st.form("worksheet_form"):
+                    standard = st.selectbox("Standard (Class)", ["9", "10", "11", "12"], key="general_standard")
+                    board = st.selectbox("Board", ["CBSE", "ICSE", "State Board"], key="general_board")
+                    subject = st.text_input("Subject", "Science", key="general_subject")
+                    st.markdown("---")
+                    topic = st.text_input("Topic", "Cell Structure", key="general_topic")
+                    if existing_topics:
+                        with st.expander("Show existing topics (for consistency)"):
+                            st.caption("Tip: To keep analytics clean, try to re-use an existing topic name if it already exists.")
+                            st.dataframe(pd.Series(existing_topics, name="Existing Topics"), use_container_width=True, hide_index=True)
+                    difficulty = st.selectbox("Difficulty", ["Easy", "Medium", "Hard"], key="general_difficulty")
+                    num_questions = st.number_input("Number of Questions", min_value=3, max_value=15, value=5, key="general_num_questions")
+                    submitted = st.form_submit_button("Generate Worksheet Draft")
+                
+                if submitted:
+                    with st.spinner("Validating topic against subject..."):
+                        is_valid_topic = ai_assistant.validate_topic_for_subject(standard, board, subject, topic)
+                    
+                    if not is_valid_topic:
+                        st.error(f"**Topic Mismatch:** The topic '{topic}' seems invalid for {subject} in Class {standard}. Please check and try again.", icon="🚨")
+                    else:
+                        with st.spinner("AI is creating the worksheet..."):
+                            worksheet_content = ai_assistant.generate_mixed_worksheet(standard, board, subject, topic, difficulty, num_questions)
+                            if worksheet_content and "worksheet" in worksheet_content:
+                                st.session_state.draft_worksheet = {
+                                    "standard": standard, "board": board, "subject": subject,
+                                    "topic": topic, "difficulty": difficulty, **worksheet_content
+                                }
+                                st.session_state.finalized_link = None
+                                st.rerun()
+                            else:
+                                st.error("Failed to generate worksheet content. The AI might be busy, please try again.")
+        
+        else:  # Adaptive Worksheet
+            st.subheader("Generate Adaptive Worksheet")
+            submissions = load_db(SUBMISSIONS_DB)
+            all_students = sorted(list(set(data['student_name'] for data in submissions.values() if 'student_name' in data)))
+            
+            if not all_students:
+                st.info("No students with submissions found.")
+            else:
+                selected_student = st.selectbox("Select Student", options=all_students, key="adaptive_student")
+                
+                if selected_student:
+                    student_submissions = {sub_id: data for sub_id, data in submissions.items() if data.get('student_name') == selected_student}
+                    
+                    if not student_submissions:
+                        st.info(f"No submissions found for {selected_student}.")
+                    else:
+                        student_topics = sorted(list(set(data.get('topic', 'Unknown') for data in student_submissions.values())))
+                        if not student_topics:
+                            st.info(f"No topics found for {selected_student}'s submissions. Use the general worksheet generator instead.")
+                        else:
+                            all_feedback = []
+                            for data in student_submissions.values():
+                                topic = data.get('topic', 'Unknown')
+                                for item in data.get('feedback', []):
+                                    all_feedback.append({
+                                        "topic": topic,
+                                        "question": item['question'],
+                                        "your_answer": item['your_answer'],
+                                        "correct_answer": item['correct_answer'],
+                                        "feedback": item['ai_feedback']
+                                    })
+                            
+                            if not all_feedback:
+                                st.info(f"{selected_student} has no incorrect answers in previous submissions. Use the general worksheet generator instead.")
+                            else:
+                                performance_summary = "\n".join([
+                                    f"Topic: {item['topic']}\nQuestion: {item['question']}\nStudent Answer: {item['your_answer']}\nCorrect Answer: {item['correct_answer']}\nAI Feedback: {item['feedback']}\n---"
+                                    for item in all_feedback
+                                ])
+                                
+                                with st.form("adaptive_worksheet_form"):
+                                    standard = st.selectbox("Standard (Class)", ["9", "10", "11", "12"], key="adaptive_standard")
+                                    board = st.selectbox("Board", ["CBSE", "ICSE", "State Board"], key="adaptive_board")
+                                    subject = st.text_input("Subject", "Science", key="adaptive_subject")
+                                    
+                                    # Topic dropdown with previously attempted topics only
+                                    topic = st.selectbox("Topic", options=student_topics, key="adaptive_topic")
+                                    
+                                    difficulty = st.selectbox("Difficulty", ["Easy", "Medium", "Hard"], key="adaptive_difficulty")
+                                    num_questions = st.number_input("Number of Questions", min_value=3, max_value=15, value=5, key="adaptive_num_questions")
+                                    submitted = st.form_submit_button("Generate Adaptive Worksheet Draft")
+                                
+                                if submitted:
+                                    if not topic.strip() or not subject.strip():
+                                        st.warning("Please enter or select a valid subject and topic.")
+                                    else:
+                                        with st.spinner("Validating topic against subject..."):
+                                            is_valid_topic = ai_assistant.validate_topic_for_subject(standard, board, subject, topic)
+                                        
+                                        if not is_valid_topic:
+                                            st.error(f"**Topic Mismatch:** The topic '{topic}' seems invalid for {subject} in Class {standard}. Please check and try again.", icon="🚨")
+                                        else:
+                                            with st.spinner("AI is creating the adaptive worksheet..."):
+                                                worksheet_content = ai_assistant.generate_adaptive_worksheet(standard, board, subject, topic, difficulty, num_questions, performance_summary)
+                                                if worksheet_content and "worksheet" in worksheet_content:
+                                                    st.session_state.draft_worksheet = {
+                                                        "standard": standard, "board": board, "subject": subject,
+                                                        "topic": topic, "difficulty": difficulty, **worksheet_content
+                                                    }
+                                                    st.session_state.finalized_link = None
+                                                    st.rerun()
+                                                else:
+                                                    st.error("Failed to generate worksheet content. The AI might be busy, please try again.")
+        
+        # --- Worksheet Editor UI ---
+        if st.session_state.draft_worksheet:
+            st.header("Review and Edit Worksheet")
+            st.info("Modify the questions/answers. When done, click 'Save and Finalize' to proceed to the assignment step.")
+            
+            with st.form("edit_worksheet_form"):
+                draft = st.session_state.draft_worksheet
+                st.text_input("Worksheet Topic", value=draft.get('topic', ''), key="edit_topic")
+                
+                for i, q in enumerate(draft["worksheet"]):
+                    with st.container(border=True):
+                        st.markdown(f"**Editing Question {i+1} ({q.get('type', 'N/A')})**")
+                        st.text_area("Question Text:", value=q['question'], key=f"q_{i}_text", height=100)
+                        
+                        if q['type'] == 'mcq':
+                            st.markdown("Options (the first one should be the correct answer):")
+                            cols = st.columns(2)
+                            correct_answer_text = q['answer']
+                            options_list = list(q['options'])
+                            if correct_answer_text in options_list:
+                                options_list.remove(correct_answer_text)
+                            sorted_options = [correct_answer_text] + options_list
+                            
+                            for opt_idx in range(4):
+                                cols[opt_idx % 2].text_input(
+                                    f"Option {opt_idx + 1}", 
+                                    value=sorted_options[opt_idx] if opt_idx < len(sorted_options) else "",
+                                    key=f"q_{i}_opt_{opt_idx}"
+                                )
+                        else:
+                            st.text_input("Correct Answer:", value=q['answer'], key=f"q_{i}_ans")
+                
+                finalize_button = st.form_submit_button("✅ Save and Finalize Worksheet", type="primary")
+                
+            if finalize_button:
+                with st.spinner("Saving your changes..."):
+                    updated_worksheet_data = st.session_state.draft_worksheet.copy()
+                    
+                    # --- THIS IS THE FIX ---
+                    # Normalize the topic to prevent fragmentation in analytics
+                    final_topic = st.session_state.edit_topic.strip().lower()
+                    # --- END FIX ---
+
+                    updated_worksheet_data['topic'] = final_topic
+            
+                    final_questions = []
+                    for i, q in enumerate(updated_worksheet_data["worksheet"]):
+                        new_q = q.copy()
+                        new_q['question'] = st.session_state[f"q_{i}_text"]
+                        
+                        if new_q['type'] == 'mcq':
+                            new_options = [st.session_state[f"q_{i}_opt_{j}"] for j in range(4)]
+                            new_q['options'] = new_options
+                            new_q['answer'] = new_options[0]
+                        else:
+                            new_q['answer'] = st.session_state[f"q_{i}_ans"]
+                        final_questions.append(new_q)
+                    
+                    updated_worksheet_data["worksheet"] = final_questions
+                    worksheet_id = str(uuid.uuid4())
+                    worksheets = load_db(WORKSHEETS_DB)
+                    worksheets[worksheet_id] = updated_worksheet_data
+                    save_db(worksheets, WORKSHEETS_DB)
+                    
+                    # --- THIS IS THE KEY CHANGE ---
+                    st.session_state.worksheet_to_assign = {"id": worksheet_id, "topic": final_topic}
+                    st.session_state.draft_worksheet = None # Clear the draft
+                    st.session_state.finalized_link = None # Clear the old state
+                    st.rerun()
+
+        # --- UI State 3: Assign Finalized Worksheet ---
+        elif st.session_state.worksheet_to_assign:
+            st.header(f"Assign Worksheet: '{st.session_state.worksheet_to_assign['topic']}'")
+            st.success("Worksheet saved! Now, assign it to a class.")
+
+            roster_data = load_db(CLASS_ROSTER_DB)
+            if not roster_data:
+                st.error("You have not created any classes. Please go to the 'Class Management' tab to create a class first.")
+                if st.button("Cancel Assignment"):
+                    st.session_state.worksheet_to_assign = None
+                    st.rerun()
+            else:
+                with st.form("assign_form"):
+                    class_options = {cid: data["class_name"] for cid, data in roster_data.items()}
+                    selected_class_id = st.selectbox(
+                        "Select Class to Assign",
+                        options=class_options.keys(),
+                        format_func=lambda cid: class_options[cid]
+                    )
+                    # --- THIS IS THE FEATURE YOU WERE MISSING ---
+                    due_date = st.date_input("Select Due Date", min_value=datetime.date.today())
+                    
+                    submit_assignment = st.form_submit_button("Assign to Class", type="primary")
+
+                if submit_assignment:
+                    with st.spinner("Assigning worksheet..."):
+                        assignments_db = load_db(ASSIGNMENTS_DB)
+                        assignment_id = str(uuid.uuid4())
+                        
+                        assignments_db[assignment_id] = {
+                            "worksheet_id": st.session_state.worksheet_to_assign['id'],
+                            "class_id": selected_class_id,
+                            "topic": st.session_state.worksheet_to_assign['topic'], # Denormalize topic
+                            "assigned_date": pd.Timestamp.now().strftime('%Y-%m-%d'),
+                            "due_date": due_date.strftime('%Y-%m-%d')
+                        }
+                        
+                        save_db(assignments_db, ASSIGNMENTS_DB)
+                        st.session_state.worksheet_to_assign = None # Clear the state
+                        st.success(f"Worksheet successfully assigned to {class_options[selected_class_id]}!")
+                        st.balloons()
+                
+                if st.button("Cancel Assignment Process"):
+                    st.session_state.worksheet_to_assign = None
+                    st.rerun()
+
+            if st.session_state.worksheet_to_assign is None and st.button("Create Another Worksheet"):
+                st.rerun()
+                    
+    # --- View Submissions Tab ---
+    # ==============================================================================
+    # --- TAB 2: MARKBOOK 
+    with tab2:
+        st.header("📖 Markbook & Assignment Status")
+
+        # Load all necessary databases
+        assignments_db = load_db(ASSIGNMENTS_DB)
+        roster_db = load_db(CLASS_ROSTER_DB)
+        submissions_db = load_db(SUBMISSIONS_DB)
+
+        if not assignments_db:
+            st.info("No assignments have been created yet. Go to the 'Worksheet Generator' to assign one.")
+        else:
+            # --- 1. Select an Assignment ---
+            # Sort assignments to show newest first
+            sorted_assignments = sorted(
+                assignments_db.items(), 
+                key=lambda item: item[1]['assigned_date'], 
+                reverse=True
+            )
+            
+            assignment_options = {aid: f"{data['topic']} (Due: {data['due_date']})" for aid, data in sorted_assignments}
+            
+            selected_aid = st.selectbox(
+                "Select an Assignment to review:",
+                options=assignment_options.keys(),
+                format_func=lambda aid: assignment_options[aid],
+                index=None,
+                placeholder="Choose an assignment..."
+            )
+
+            if selected_aid:
+                # --- 2. Build the Markbook for the selected assignment ---
+                assignment_data = assignments_db[selected_aid]
+                class_id = assignment_data['class_id']
+                
+                if class_id not in roster_db:
+                    st.error(f"Error: The class associated with this assignment (ID: {class_id}) no longer exists in the roster.")
+                    st.stop()
+
+                student_roster = roster_db[class_id].get('students', [])
+                if not student_roster:
+                    st.warning("This class has no students in the roster.")
+                    st.stop()
+
+                # Find all submissions for THIS assignment
+                assignment_submissions = {} # Use a dict for fast lookup by student_id
+                for sub_id, sub_data in submissions_db.items():
+                    if sub_data.get('assignment_id') == selected_aid:
+                        assignment_submissions[sub_data['student_id']] = sub_data
+                
+                # --- 3. Generate Status List & KPIs ---
+                markbook_list = []
+                total_students = len(student_roster)
+                num_submitted = 0
+                total_score = 0
+                
+                due_date = pd.to_datetime(assignment_data['due_date'])
+                is_past_due = pd.Timestamp.now() > due_date
+
+                for student in student_roster:
+                    student_id = student['student_id']
+                    submission = assignment_submissions.get(student_id)
+                    
+                    if submission:
+                        num_submitted += 1
+                        score = submission.get('score_percent', 0)
+                        total_score += score
+                        markbook_list.append({
+                            "Student Name": student['name'],
+                            "Status": "✅ Submitted",
+                            "Submitted At": pd.to_datetime(submission['submitted_at']).strftime('%Y-%m-%d %H:%M'),
+                            "Score (%)": score,
+                            "Submission ID": submission['assignment_id'] # Using assignment_id for consistency, could be real sub_id
+                        })
+                    else:
+                        status = "❌ Missing (Past Due)" if is_past_due else "Not Started"
+                        markbook_list.append({
+                            "Student Name": student['name'],
+                            "Status": status,
+                            "Submitted At": "N/A",
+                            "Score (%)": None,
+                            "Submission ID": None
+                        })
+
+                # --- 4. Display KPIs & Markbook Table ---
+                completion_rate = (num_submitted / total_students) * 100 if total_students > 0 else 0
+                avg_score = (total_score / num_submitted) if num_submitted > 0 else 0
+
+                st.markdown("---")
+                st.subheader(f"Status for: {assignment_data['topic']}")
+                
+                kpi_cols = st.columns(3)
+                kpi_cols[0].metric("Total Students", f"{total_students}")
+                kpi_cols[1].metric("Completion Rate", f"{completion_rate:.1f}%")
+                kpi_cols[2].metric("Class Average (on submitted)", f"{avg_score:.1f}%")
+
+                markbook_df = pd.DataFrame(markbook_list)
+                st.dataframe(markbook_df, use_container_width=True, hide_index=True)
+
+                st.markdown("---")
+                
+                # --- 5. Submission Detail Viewer (Preserved functionality) ---
+                st.subheader("View Individual Submission Details")
+                
+                # Filter dropdown to only students who HAVE submitted
+                submitted_students_map = {
+                    sub_data['student_id']: sub_data['student_name']
+                    for sub_data in assignment_submissions.values()
+                }
+
+                if not submitted_students_map:
+                    st.info("No submissions yet for this assignment.")
+                else:
+                    selected_student_id = st.selectbox(
+                        "Select a submitted student to view details:",
+                        options=submitted_students_map.keys(),
+                        format_func=lambda sid: submitted_students_map[sid]
+                    )
+
+                    if selected_student_id:
+                        selected_sub_data = assignment_submissions[selected_student_id]
+                        st.write(f"#### Details for {selected_sub_data['student_name']}")
+                        
+                        st.info("**AI Performance Overview:**")
+                        overview = selected_sub_data.get('ai_overview')
+                        if overview:
+                            st.markdown(overview)
+                        else:
+                            st.warning("No AI overview was generated for this submission.")
+                        
+                        with st.expander("See detailed raw submission data"):
+                            st.json(selected_sub_data)
+    
+    with tab3:
+        st.header("🎓 Student Progress Tracker")
+        submissions = load_db(SUBMISSIONS_DB)
+        if not submissions:
+            st.info("No submission data available to track progress.")
+        else:
+            all_students = sorted(list(set(data['student_name'] for data in submissions.values())))
+            
+            if not all_students:
+                st.info("No submissions with student names found.")
+                return
+            
+            selected_student = st.selectbox("Select a Student to Track Progress", options=all_students)
+
+            if selected_student:
+                student_data = []
+                for sub_id, data in submissions.items():
+                    if data['student_name'] == selected_student:
+                        student_data.append({
+                            "Date": pd.to_datetime(data['submitted_at']),
+                            "Topic": data.get('topic', 'N/A'),
+                            "Score (%)": data.get('score_percent', 0)
+                        })
+                
+                if not student_data:
+                    st.warning(f"No submissions found for {selected_student}.")
+                else:
+                    progress_df = pd.DataFrame(student_data).sort_values(by="Date")
+                    st.subheader(f"Performance History for {selected_student}")
+                    
+                    # --- MODIFIED: Use bar_chart instead of line_chart ---
+                    # 1. Create the figure
+                    fig = px.bar(
+                        progress_df, 
+                        x="Date", 
+                        y="Score (%)",
+                        title=f"Worksheet Scores for {selected_student}",
+                        text="Score (%)" # Use the score column for the text labels
+                    )
+                    
+                    # 2. Customize the appearance
+                    fig.update_traces(
+                        texttemplate='%{text:.0f}%', # Format the text as a percentage
+                        textposition='outside' # Place the text label above the bar
+                    )
+                    
+                    fig.update_layout(
+                        uniformtext_minsize=8, 
+                        uniformtext_mode='hide',
+                        bargap=0.3, # Adjust gap to make bars appear wider
+                        yaxis_title="Score (Percentage)",
+                        xaxis_title="Submission Date"
+                    )
+
+                    # 3. Set the Y-axis range to 0-100
+                    fig.update_yaxes(range=[0, 100])
+
+                    # 4. Display the chart in Streamlit
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.dataframe(progress_df, use_container_width=True)
+                    
+    # Add this entire block at the end of the render_teacher_dashboard function
+
+    with tab4:
+        st.header("🔬 Class Insights")
+        submissions = load_db(SUBMISSIONS_DB)
+
+        if not submissions:
+            st.info("No submission data available to generate insights.")
+        else:
+            # --- 1. Weak Area Heatmap ---
+            st.subheader("Weak Area Analysis by Topic")
+            
+            topic_errors = defaultdict(int)
+            topic_student_errors = defaultdict(set)
+
+            for sub_id, data in submissions.items():
+                if data.get("feedback"): # If there were incorrect answers
+                    topic = data.get("topic", "Uncategorized")
+                    student_name = data.get("student_name", "Unknown")
+                    topic_errors[topic] += len(data["feedback"])
+                    topic_student_errors[topic].add(student_name)
+
+            if not topic_errors:
+                st.success("🎉 No common weak areas found! Students are performing well across all topics.")
+            else:
+                error_df = pd.DataFrame(list(topic_errors.items()), columns=['Topic', 'Number of Errors']).sort_values(by='Number of Errors', ascending=False)
+                
+                fig = px.treemap(error_df, path=['Topic'], values='Number of Errors',
+                                title='Heatmap of Weak Areas (Topics with Most Errors)',
+                                color='Number of Errors', color_continuous_scale='Reds')
+                fig.update_layout(margin = dict(t=50, l=25, r=25, b=25))
+                st.plotly_chart(fig, use_container_width=True)
+
+                weakest_topic = error_df.iloc[0]
+                st.warning(f"The most challenging topic appears to be **'{weakest_topic['Topic']}'** with **{weakest_topic['Number of Errors']}** recorded errors.")
+
+                if st.button(f"Generate Remediation Plan for '{weakest_topic['Topic']}'"):
+                    with st.spinner(f"Generating a plan for {weakest_topic['Topic']}..."):
+                        student_count = len(topic_student_errors[weakest_topic['Topic']])
+                        plan = ai_assistant.generate_class_remediation_plan(
+                            topic=weakest_topic['Topic'],
+                            error_count=int(weakest_topic['Number of Errors']),
+                            student_count=student_count
+                        )
+                        st.info(f"**Suggested Plan for '{weakest_topic['Topic']}'**")
+                        st.markdown(plan)
+
+            st.markdown("---")
+
+            # --- 2. At-Risk Student Identifier ---
+            st.subheader("At-Risk Student Identifier")
+            
+            student_performance = defaultdict(list)
+            for sub_id, data in submissions.items():
+                name = data.get("student_name")
+                if not name:
+                    continue
+                student_performance[name].append({
+                    "score": data.get("score_percent", 0),
+                    "date": pd.to_datetime(data.get("submitted_at")),
+                    "topic": data.get("topic", "N/A")
+                })
+
+            at_risk_students = []
+            for name, subs in student_performance.items():
+                if not subs:
+                    continue
+                
+                df = pd.DataFrame(subs).sort_values(by="date", ascending=False)
+                avg_score = df['score'].mean()
+                last_score = df['score'].iloc[0]
+                submission_count = len(df)
+                
+                # Define at-risk criteria: avg score < 70 AND last score is also below 70
+                if avg_score < 70 and last_score < 70:
+                    struggling_topics = ", ".join(list(set(sub['topic'] for sub in subs if sub['score'] < 100)))
+                    at_risk_students.append({
+                        "Student Name": name,
+                        "Average Score (%)": f"{avg_score:.1f}",
+                        "Most Recent Score (%)": f"{last_score:.1f}",
+                        "Submissions": submission_count,
+                        "performance_summary": (
+                            f"- Overall Average Score: {avg_score:.1f}%\n"
+                            f"- Most Recent Score: {last_score:.1f}%\n"
+                            f"- Number of worksheets submitted: {submission_count}\n"
+                            f"- Topics with errors: {struggling_topics}"
+                        )
+                    })
+
+            if not at_risk_students:
+                st.success("✅ No students are currently flagged as at-risk. Great work by everyone!")
+            else:
+                st.warning(f"Found {len(at_risk_students)} student(s) who might need extra support based on recent performance.")
+                
+                display_df = pd.DataFrame(at_risk_students)[["Student Name", "Average Score (%)", "Most Recent Score (%)", "Submissions"]]
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+                at_risk_names = [s["Student Name"] for s in at_risk_students]
+                selected_student_name = st.selectbox("Select a student to generate a personalized remediation plan:", options=at_risk_names)
+                
+                if selected_student_name:
+                    if st.button(f"Generate Plan for {selected_student_name}"):
+                        student_to_help = next((s for s in at_risk_students if s["Student Name"] == selected_student_name), None)
+                        if student_to_help:
+                            with st.spinner(f"Creating a personalized plan for {selected_student_name}..."):
+                                plan = ai_assistant.generate_student_remediation_plan(
+                                    student_name=selected_student_name,
+                                    performance_summary=student_to_help["performance_summary"]
+                                )
+                                st.info(f"**Personalized Plan for {selected_student_name}**")
+                                st.markdown(plan)
+    with tab5:
+        st.header("🎓 Class Roster Management")
+        st.info("Create your classes here, then add students to each class. This is the first step to assigning worksheets.")
+
+        roster_data = load_db(CLASS_ROSTER_DB)
+
+        col1, col2 = st.columns(2)
+
+        # --- Column 1: Create Class & Add Students ---
+        with col1:
+            # --- Form to Create a New Class ---
+            with st.form("new_class_form", clear_on_submit=True):
+                st.subheader("1. Create a New Class")
+                new_class_name = st.text_input("New Class Name (e.g., 'Class 10A - Physics')")
+                submitted_class = st.form_submit_button("Create Class")
+                
+                if submitted_class:
+                    if not new_class_name.strip():
+                        st.warning("Please enter a class name.")
+                    else:
+                        class_id = str(uuid.uuid4())
+                        roster_data[class_id] = {
+                            "class_name": new_class_name.strip(),
+                            "students": []
+                        }
+                        save_db(roster_data, CLASS_ROSTER_DB)
+                        st.success(f"Class '{new_class_name}' created!")
+                        st.rerun()
+
+            st.markdown("---")
+
+            # --- Form to Add Students to a Class ---
+            if not roster_data:
+                st.info("Create a class before you can add students.")
+            else:
+                with st.form("new_student_form", clear_on_submit=True):
+                    st.subheader("2. Add Students to Class")
+                    
+                    # Create dropdown options from the loaded roster data
+                    class_options = {cid: data["class_name"] for cid, data in roster_data.items()}
+                    selected_class_id = st.selectbox(
+                        "Select Class", 
+                        options=class_options.keys(), 
+                        format_func=lambda cid: class_options[cid]
+                    )
+                    
+                    new_student_name = st.text_input("New Student's Full Name")
+                    new_student_pin = st.text_input("Create 4-Digit PIN", max_chars=4, type="password")
+                    
+                    submitted_student = st.form_submit_button("Add Student")
+
+                    if submitted_student:
+                        if not new_student_name.strip() or not new_student_pin.strip():
+                            st.warning("Please provide both a student name and a PIN.")
+                        elif not (new_student_pin.isdigit() and len(new_student_pin) == 4):
+                            st.warning("PIN must be exactly 4 digits.")
+                        else:
+                            student_id = str(uuid.uuid4())
+                            new_student_data = {
+                                "student_id": student_id,
+                                "name": new_student_name.strip(),
+                                "pin": new_student_pin
+                            }
+                            # Append the student to the correct class list
+                            roster_data[selected_class_id]["students"].append(new_student_data)
+                            save_db(roster_data, CLASS_ROSTER_DB)
+                            st.success(f"Student '{new_student_name}' added to {class_options[selected_class_id]}!")
+                            st.rerun()
+
+        # --- Column 2: View Current Rosters ---
+        # --- Column 2: View and Manage Current Rosters ---
+        with col2:
+            st.subheader("Current Class Rosters")
+            if not roster_data:
+                st.info("No classes created yet.")
+            else:
+                for class_id, data in roster_data.items():
+                    with st.expander(f"**{data['class_name']}** ({len(data['students'])} students)"):
+                        st.write(f"*Class ID: `{class_id}`*")
+                        
+                        if not data['students']:
+                            st.info("No students have been added to this class yet.")
+                        else:
+                            # Display the roster in a clean table
+                            student_df = pd.DataFrame(data['students'])
+                            st.dataframe(student_df, use_container_width=True, hide_index=True)
+
+                            st.markdown("---")
+                            
+                            # --- FEATURE 1: Delete a specific student ---
+                            with st.form(key=f"delete_student_{class_id}"):
+                                st.markdown("**Delete a Student:**")
+                                student_options = {s['student_id']: s['name'] for s in data['students']}
+                                student_to_delete = st.selectbox(
+                                    "Select student to remove:", 
+                                    options=student_options.keys(), 
+                                    format_func=lambda sid: student_options[sid]
+                                )
+                                if st.form_submit_button("Remove Student from Class", type="primary"):
+                                    # Rebuild the student list excluding the selected student
+                                    roster_data[class_id]['students'] = [
+                                        s for s in roster_data[class_id]['students'] if s['student_id'] != student_to_delete
+                                    ]
+                                    save_db(roster_data, CLASS_ROSTER_DB)
+                                    st.success(f"Removed {student_options[student_to_delete]} from the class.")
+                                    st.rerun()
+
+                        st.markdown("---")
+                        
+                        # --- FEATURE 2: Delete the entire class (with confirmation) ---
+                        st.markdown("**Delete This Class:**")
+                        
+                        # Initialize confirmation state
+                        confirm_key = f"confirm_delete_class_{class_id}"
+                        if confirm_key not in st.session_state:
+                            st.session_state[confirm_key] = False
+                            
+                        if st.button("Delete This Entire Class", type="primary", key=f"delete_class_trigger_{class_id}"):
+                            st.session_state[confirm_key] = True # Trigger confirmation
+
+                        # Show confirmation dialogue if triggered
+                        if st.session_state.get(confirm_key, False):
+                            st.warning(f"**Are you sure you want to permanently delete the class '{data['class_name']}'?** All students in it will be removed. This cannot be undone.")
+                            c1, c2 = st.columns(2)
+                            if c1.button("✅ Yes, permanently delete", key=f"confirm_yes_{class_id}"):
+                                del roster_data[class_id] # Delete the class from the dict
+                                save_db(roster_data, CLASS_ROSTER_DB)
+                                del st.session_state[confirm_key] # Clean up state
+                                st.success("Class successfully deleted.")
+                                st.rerun()
+                            if c2.button("Cancel", key=f"confirm_no_{class_id}"):
+                                st.session_state[confirm_key] = False # Reset state
+                                st.rerun()
+
+    
+# ==============================================================================
+# --- Main App Router  ---
+# ==============================================================================
+st.set_page_config(page_title="Interactive Teacher AI", layout="wide")
+
+ai_assistant = get_ai_assistant()
+query_params = st.query_params
+
+# Check if teacher is logging in
+if "view" in query_params and query_params["view"] == "teacher":
+    render_teacher_dashboard(ai_assistant)
+
+# Check if a student is already logged in
+elif "logged_in_student" in st.session_state:
+    student_info = st.session_state.logged_in_student
+    render_student_dashboard(student_info["student_data"], student_info["class_id"], ai_assistant)
+
+# Default to the student login portal
+else:
+    render_student_login_portal()
