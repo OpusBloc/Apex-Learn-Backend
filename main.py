@@ -37,17 +37,26 @@ app.add_middleware(
 )
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-SECRET_KEY = os.getenv("SECRET_KEY", "wsdfgvhbjnkjhgfdxfcgvbhjnmkjnhbgvfcdxszaqwertyuiop")
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 1
 
 # Database connection
 async def get_db():
-    conn = await asyncpg.connect(user='postgres', password='admin', database='edututor', host='localhost')
     try:
-        yield conn
-    finally:
-        await conn.close()
+        conn = await asyncpg.connect(
+            user='postgres',
+            password='admin',
+            database='edututor',
+            host='localhost'
+        )
+        try:
+            yield conn
+        finally:
+            await conn.close()
+    except asyncpg.exceptions.ConnectionDoesNotExistError as e:
+        logger.error(f"Database connection failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to connect to the database")
 
 # Pydantic models
 class UserCreate(BaseModel):
@@ -159,6 +168,33 @@ class FeedbackRequest(BaseModel):
     message_id: int
     liked: bool
 
+class PreviousMarksRequest(BaseModel):
+    subject: str
+    lastExam: float
+    lastTest: float
+    assignment: float
+
+class QuizGenerateRequest(BaseModel):
+    subject: str
+    board: str
+    currentClass: str
+    previousMarks: float
+    goal: str
+    chapters: List[str]
+
+class QuickTopicsRequest(BaseModel):
+    subject: str
+    board: str
+    classNum: int
+
+class StudyPlanRequest(BaseModel):
+    subject: str
+    weakChapters: List[str]
+    planType: str
+
+class QuizResultsRequest(BaseModel):
+    quizType: str
+    results: dict
 
 # Authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -252,7 +288,7 @@ def get_subjects_from_openai(board: str, class_num: int) -> List[str]:
     """
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             messages=[{"role": "system", "content": prompt}],
             max_tokens=500
         )
@@ -263,31 +299,114 @@ def get_subjects_from_openai(board: str, class_num: int) -> List[str]:
         logger.error(f"Error fetching subjects: {e}")
         return ["Mathematics", "Physics", "Chemistry", "Biology", "English"]
 
-def get_syllabus_from_openai(board: str, class_num: int, subject: str) -> dict:
+
+
+def get_syllabus_from_openai(board: str, class_num: int, subject: str, missing_chapters: Optional[str] = None) -> dict:
     prompt = f"""
-    {SYSTEM_PROMPT}
-    Provide the complete syllabus for {board} Class {class_num} {subject} as per the official curriculum (NCERT for CBSE, SCERT Telangana for BSE Telangana, CISCE for ICSE/ISC).
-    For CBSE, use NCERT textbooks as the source. For BSE Telangana, use SCERT Telangana textbooks.
-    List ALL chapters and their major topics in a structured JSON format with a top-level 'chapters' key. For each chapter, include:
-    - Chapter name (as 'name'), exactly matching the official textbook titles
-    - List of super important topics (key concepts emphasized in exams, as 'topics')
-    - List of subtopics for each topic (as 'subtopics'), if applicable
-    Exclude topics marked for activities/projects or less emphasized in recent exams.
-    Return only the JSON object, without any Markdown or code block formatting.
-    Example: {{"chapters": [{{"name": "Chapter Name", "topics": [{{"name": "Topic 1", "subtopics": ["Subtopic 1", "Subtopic 2"]}}, {{"name": "Topic 2", "subtopics": []}}]}}]}}
+    Provide the syllabus for {board} Class {class_num} {subject} strictly from the official NCERT textbook for the 2025-26 academic session. Use only the table of contents from the latest NCERT Class 10 Science textbook, which contains exactly 13 chapters. Do not include any chapters or topics from previous years, external sources, or non-NCERT materials. Explicitly exclude the following chapters that were removed: 'Periodic Classification of Elements', 'Sources of Energy', and 'Sustainable Management of Natural Resources'.
+    Verify the syllabus twice against the official NCERT textbook (2025-26 edition) to ensure accuracy and completeness, matching exactly 13 chapters.
     """
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=4000
-        )
-        content = response.choices[0].message.content.strip()
-        syllabus = json.loads(content)
-        return syllabus if isinstance(syllabus, dict) and 'chapters' in syllabus else {"chapters": []}
-    except Exception as e:
-        logger.error(f"Error fetching syllabus: {e}")
-        return {"chapters": []}
+    if missing_chapters:
+        prompt += f"""
+        The user has specified the following missing chapters: {missing_chapters}.
+        Include these chapters only if they are explicitly listed in the official NCERT Class 10 Science textbook's table of contents for 2025-26.
+        """
+    prompt += """
+    Return the syllabus in a structured JSON format with a top-level 'chapters' key. For each chapter, include:
+    - Chapter name (as 'name'), exactly matching the official NCERT textbook's table of contents for 2025-26.
+    - List of super important topics (key concepts emphasized in exams, as 'topics'), sourced directly from the textbook's content.
+    - List of subtopics for each topic (as 'subtopics'), if specified in the textbook, excluding any non-exam-focused content like activities or projects.
+    Return only the JSON object, without any Markdown, code block formatting, or additional text.
+    Example: {"chapters": [{"name": "Chapter Name", "topics": [{"name": "Topic 1", "subtopics": ["Subtopic 1", "Subtopic 2"]}, {"name": "Topic 2", "subtopics": []}]}]}
+    If the syllabus cannot be accurately retrieved or the request is unclear, return an empty JSON object: {"chapters": []}
+    """
+    max_attempts = 5
+    syllabus = {"chapters": []}
+    chapters_fetched = set()
+
+    for attempt in range(max_attempts):
+        try:
+            logger.debug(f"Sending OpenAI API request for {board} Class {class_num} {subject}, attempt {attempt + 1}")
+            response = openai.ChatCompletion.create(
+                model="gpt-4.1-nano",
+                messages=[{"role": "system", "content": prompt}],
+                max_tokens=4000
+            )
+            content = response.choices[0].message.content.strip()
+            logger.debug(f"OpenAI raw response: {content}")
+
+            # Handle potential code block formatting
+            if content.startswith("```json"):
+                content = content[7:].rstrip("```").strip()
+            elif content.startswith("```"):
+                content = content[3:].rstrip("```").strip()
+
+            # Parse and validate response
+            try:
+                parsed_response = json.loads(content)
+                if not isinstance(parsed_response, dict) or "chapters" not in parsed_response:
+                    logger.error(f"Invalid JSON structure: Missing 'chapters' key in {content}")
+                    continue
+            except json.JSONDecodeError as json_err:
+                logger.error(f"JSON decode error: {str(json_err)}, content: {content}")
+                continue
+
+            # Validate syllabus content
+            valid_syllabus = True
+            for chapter in parsed_response.get("chapters", []):
+                if "name" not in chapter or not chapter["name"]:
+                    valid_syllabus = False
+                    logger.error(f"Chapter missing 'name': {chapter}")
+                    break
+                if "topics" not in chapter or not isinstance(chapter["topics"], list):
+                    valid_syllabus = False
+                    logger.error(f"Chapter 'topics' invalid or missing: {chapter}")
+                    break
+                for topic in chapter["topics"]:
+                    if "name" not in topic or not topic["name"]:
+                        valid_syllabus = False
+                        logger.error(f"Topic missing 'name': {topic} in chapter {chapter['name']}")
+                        break
+                    if "subtopics" in topic and not isinstance(topic["subtopics"], list):
+                        valid_syllabus = False
+                        logger.error(f"Topic 'subtopics' invalid: {topic} in chapter {chapter['name']}")
+                        break
+                if not valid_syllabus:
+                    break
+            if not valid_syllabus:
+                logger.warning(f"Invalid syllabus for {subject}, retrying...")
+                continue
+
+            # Validate chapter count and excluded chapters
+            if len(parsed_response.get("chapters", [])) != 13:
+                logger.warning(f"Expected 13 chapters, got {len(parsed_response.get('chapters', []))}, retrying...")
+                continue
+            excluded_chapters = {'Periodic Classification of Elements', 'Sources of Energy', 'Sustainable Management of Natural Resources'}
+            if any(chapter["name"] in excluded_chapters for chapter in parsed_response.get("chapters", [])):
+                logger.warning(f"Response contains excluded chapters, retrying...")
+                continue
+
+            # Accumulate unique chapters
+            for chapter in parsed_response.get("chapters", []):
+                if chapter.get("name") and chapter["name"] not in chapters_fetched:
+                    syllabus["chapters"].append(chapter)
+                    chapters_fetched.add(chapter["name"])
+
+            # Consider syllabus complete if exactly 13 chapters are fetched
+            if len(chapters_fetched) == 13:
+                logger.info(f"Syllabus fetched with {len(chapters_fetched)} chapters after attempt {attempt + 1}")
+                return syllabus
+            else:
+                logger.warning(f"Fetched {len(chapters_fetched)} chapters, expected 13, retrying...")
+                syllabus["chapters"] = []  # Reset if not exactly 13
+                chapters_fetched.clear()
+                continue
+        except Exception as e:
+            logger.error(f"Error fetching syllabus from OpenAI: {str(e)}")
+            if attempt == max_attempts - 1:
+                logger.error(f"Failed to fetch complete syllabus after {max_attempts} attempts")
+                return syllabus  # Return accumulated syllabus, even if empty
+    return syllabus
 
 async def generate_quick_topics(board: str, class_num: int, subject: str, db=Depends(get_db)) -> List[dict]:
     try:
@@ -320,33 +439,99 @@ async def generate_quick_topics(board: str, class_num: int, subject: str, db=Dep
         return []
 
 
-def create_quiz_from_openai(board: str, class_num: int, subject: str, chapters: List[dict], level: str) -> List[dict]:
-    chapter_names = [chapter['name'] for chapter in chapters]
+def create_quiz_from_openai(board: str, class_num: int, subject: str, chapters: List[str], level: str) -> List[dict]:
+    if not chapters:
+        logger.error("No chapters provided for quiz generation")
+        raise ValueError("No chapters provided for quiz generation")
+
     prompt = f"""
     {SYSTEM_PROMPT}
-    Create a quiz for {board} Class {class_num} {subject} with exactly one multiple-choice question per chapter, covering the following chapters: {', '.join(chapter_names)}.
+    Create a quiz for {board} Class {class_num} {subject} with exactly one multiple-choice question per chapter, covering the following chapters: {', '.join(chapters)}.
     The quiz should be at {level} level (beginner, intermediate, or advanced) based on the student's previous performance.
     Each question must:
     - Be derived strictly from the official textbook syllabus (NCERT for CBSE, SCERT Telangana for BSE Telangana, CISCE for ICSE/ISC).
-    - Cover a key concept from the specified chapter, ensuring all chapters are represented.
+    - Cover a key concept from the specified chapter, ensuring all listed chapters are represented.
     - Have 4 multiple-choice options.
-    - Include the correct answer and the chapter it corresponds to.
+    - Include the question ID (UUID), question text, options, correct answer, and the chapter it corresponds to.
     Return a JSON list of questions in the format:
-    [{{"question": "Sample question?", "options": ["Option 1", "Option 2", "Option 3", "Option 4"], "answer": "Option 1", "chapter": "Chapter Name"}}]
-    Return only the JSON list, without any Markdown or code block formatting.
+    [{{"id": "uuid", "question": "Sample question?", "options": ["Option 1", "Option 2", "Option 3", "Option 4"], "correctAnswer": "Option 1", "chapter": "Chapter Name"}}]
+    Return only the JSON list, without any Markdown, code block formatting, or additional text. If no questions can be generated, return an empty JSON list: []
     """
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=4000
-        )
-        content = response.choices[0].message.content.strip()
-        quiz = json.loads(content)
-        return quiz if isinstance(quiz, list) else []
-    except Exception as e:
-        logger.error(f"Error creating quiz: {e}")
-        return []
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            logger.debug(f"Sending OpenAI API request for quiz generation, attempt {attempt + 1}")
+            response = openai.ChatCompletion.create(
+                model="gpt-4.1-nano",
+                messages=[{"role": "system", "content": prompt}],
+                max_tokens=4000
+            )
+            content = response.choices[0].message.content.strip()
+            logger.debug(f"OpenAI raw response: {content}")
+
+            # Handle potential code block formatting
+            if content.startswith("```json"):
+                content = content[7:].rstrip("```").strip()
+            elif content.startswith("```"):
+                content = content[3:].rstrip("```").strip()
+
+            # Validate JSON
+            if not content:
+                logger.error("Empty response from OpenAI")
+                continue
+
+            try:
+                quiz = json.loads(content)
+                if not isinstance(quiz, list):
+                    logger.error(f"Invalid response format: Expected list, got {type(quiz)}")
+                    continue
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error: {str(e)}, content: {content}")
+                continue
+
+            # Validate question structure
+            valid_quiz = True
+            for q in quiz:
+                if not all(key in q for key in ["id", "question", "options", "correctAnswer", "chapter"]):
+                    logger.error(f"Invalid question structure: {q}")
+                    valid_quiz = False
+                    break
+                if not isinstance(q["options"], list) or len(q["options"]) != 4:
+                    logger.error(f"Invalid options in question: {q}")
+                    valid_quiz = False
+                    break
+                if q["correctAnswer"] not in q["options"]:
+                    logger.error(f"Correct answer not in options: {q}")
+                    valid_quiz = False
+                    break
+                if q["chapter"] not in chapters:
+                    logger.error(f"Chapter {q['chapter']} not in provided chapters: {chapters}")
+                    valid_quiz = False
+                    break
+            if not valid_quiz:
+                logger.warning(f"Invalid quiz structure, retrying...")
+                continue
+
+            # Ensure one question per chapter
+            chapter_set = {q["chapter"] for q in quiz}
+            if len(chapter_set) != len(chapters):
+                logger.warning(f"Quiz does not cover all chapters. Got {len(chapter_set)}, expected {len(chapters)}")
+                continue
+
+            # Ensure unique IDs
+            for q in quiz:
+                if "id" not in q or not q["id"]:
+                    q["id"] = str(uuid.uuid4())
+
+            logger.info(f"Successfully generated quiz with {len(quiz)} questions")
+            return quiz
+        except Exception as e:
+            logger.error(f"Error in attempt {attempt + 1}: {str(e)}")
+            if attempt == max_attempts - 1:
+                logger.error(f"Failed to generate quiz after {max_attempts} attempts")
+                raise Exception(f"Failed to generate quiz: {str(e)}")
+    raise Exception("Failed to generate quiz after maximum attempts")
+
 
 def explain_topic_with_openai(board: str, class_num: int, subject: str, chapter: str, topic: str) -> str:
     prompt = f"""
@@ -362,7 +547,7 @@ def explain_topic_with_openai(board: str, class_num: int, subject: str, chapter:
     """
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             messages=[{"role": "system", "content": prompt}],
             max_tokens=1000
         )
@@ -774,59 +959,152 @@ async def get_subjects(board: str, class_num: int, db=Depends(get_db), current_u
         logger.error(f"Error fetching subjects: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching subjects: {str(e)}")
 
+
 @app.get("/api/syllabus/{board}/{class_num}/{subject}")
 async def get_syllabus(board: str, class_num: int, subject: str, db=Depends(get_db), current_user=Depends(get_current_user)):
     try:
-        cached = await db.fetchrow("SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3", board, class_num, subject)
-        if cached and cached["syllabus_data"]:
-            return {"syllabus": cached["syllabus_data"]}
-        syllabus = get_syllabus_from_openai(board, class_num, subject)
-        await db.execute(
-            "INSERT INTO syllabus_cache (board, class_num, subject, syllabus_data) VALUES ($1, $2, $3, $4)",
-            board, class_num, subject, syllabus
+        # Check if syllabus exists in cache
+        cached = await db.fetchrow(
+            "SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
+            board, class_num, subject
         )
+        if cached and cached["syllabus_data"]:
+            try:
+                syllabus = json.loads(cached["syllabus_data"])
+                logger.info(f"Returning cached syllabus for {board} Class {class_num} {subject}")
+                return {"syllabus": syllabus}
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing cached syllabus data: {str(e)}")
+                # Proceed to fetch from OpenAI if cached data is invalid
+
+        # Fetch from OpenAI if not cached or cache is invalid
+        syllabus = get_syllabus_from_openai(board, class_num, subject)
+        
+        # Cache the response, even if empty
+        try:
+            await db.execute(
+                """
+                INSERT INTO syllabus_cache (board, class_num, subject, syllabus_data)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (board, class_num, subject)
+                DO UPDATE SET syllabus_data = EXCLUDED.syllabus_data, updated_at = CURRENT_TIMESTAMP
+                """,
+                board, class_num, subject, json.dumps(syllabus)
+            )
+            logger.info(f"Cached syllabus for {board} Class {class_num} {subject}, chapters: {len(syllabus.get('chapters', []))}")
+        except asyncpg.exceptions.DataError as e:
+            logger.error(f"Database error while caching syllabus: {str(e)}")
+            # Continue to return syllabus even if caching fails
+        
         return {"syllabus": syllabus}
+    except asyncpg.exceptions.UndefinedTableError:
+        logger.error("Table syllabus_cache does not exist")
+        raise HTTPException(status_code=500, detail="Syllabus cache table is not set up in the database")
     except Exception as e:
         logger.error(f"Error getting syllabus: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting syllabus: {str(e)}")
 
-@app.post("/api/quiz/initial")
-async def create_initial_quiz(quiz_request: QuizRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
-    try:
-        cached_syllabus = await db.fetchrow("SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3", quiz_request.board, quiz_request.classNum, quiz_request.subject)
-        if not cached_syllabus:
-            raise HTTPException(status_code=404, detail="Syllabus not found")
-        chapters = cached_syllabus["syllabus_data"].get("chapters", [])
-        quiz = create_quiz_from_openai(quiz_request.board, quiz_request.classNum, quiz_request.subject, chapters, quiz_request.level)
-        return {"quiz": quiz}
-    except Exception as e:
-        logger.error(f"Failed to create quiz: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to create quiz: {str(e)}")
 
 @app.post("/api/study-plan/generate")
 async def generate_study_plan(plan_request: StudyPlanRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
     try:
         user_id = current_user["id"]
-        mock_plan = {
-            "Week 1": [
-                {
-                    "date": "2025-09-06",
-                    "chapter": plan_request.subject,
-                    "topic": "Linear Equations",
-                    "subtopic": "Solving Linear Equations",
-                    "time": 2.0,
-                    "completed": False
-                }
-            ]
-        }
+        # Fetch syllabus from cache
+        cached_syllabus = await db.fetchrow(
+            "SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
+            current_user["board"] or "CBSE",  # Fallback to CBSE if board not set
+            int(current_user["class"] or 10),  # Fallback to class 10
+            plan_request.subject
+        )
+        if not cached_syllabus:
+            raise HTTPException(status_code=404, detail="Syllabus not found")
+
+        syllabus = json.loads(cached_syllabus["syllabus_data"])
+        chapters = syllabus.get("chapters", [])
+
+        # Filter chapters to include only weak chapters (or all if none specified)
+        target_chapters = [
+            chapter for chapter in chapters
+            if not plan_request.weakChapters or chapter["name"] in plan_request.weakChapters
+        ]
+        if not target_chapters:
+            raise HTTPException(status_code=400, detail="No matching chapters found for the study plan")
+
+        # Generate dynamic study plan
+        study_plan = {}
+        start_date = datetime.now().date()
+        for week in range(1, 3):  # Plan for 2 weeks
+            week_key = f"Week {week}"
+            study_plan[week_key] = []
+            for chapter in target_chapters[:2]:  # Limit to 2 chapters per week
+                for topic in chapter.get("topics", [])[:2]:  # Limit to 2 topics per chapter
+                    study_plan[week_key].append({
+                        "date": (start_date + timedelta(days=(week-1)*7)).isoformat(),
+                        "chapter": chapter["name"],
+                        "topic": topic["name"],
+                        "subtopic": topic["subtopics"][0] if topic.get("subtopics") else "",
+                        "time": 2.0,  # Default study time
+                        "completed": False
+                    })
+
+        # Store the plan in the database
         await db.execute(
             "INSERT INTO study_plan (user_id, subject, plan_data, weak_chapters) VALUES ($1, $2, $3, $4)",
-            user_id, plan_request.subject, mock_plan, plan_request.weakChapters
+            user_id, plan_request.subject, study_plan, plan_request.weakChapters
         )
-        return {"studyPlan": mock_plan}
+        logger.info(f"Generated study plan for user {user_id}, subject {plan_request.subject}")
+        return {"studyPlan": study_plan}
+    except asyncpg.exceptions.UndefinedTableError:
+        logger.error("Table study_plan does not exist")
+        raise HTTPException(status_code=500, detail="Study plan table is not set up in the database")
     except Exception as e:
         logger.error(f"Failed to generate study plan: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to generate study plan: {str(e)}")
+
+
+@app.post("/api/syllabus/regenerate/{board}/{class_num}/{subject}")
+async def regenerate_syllabus(
+    board: str,
+    class_num: int,
+    subject: str,
+    missing_chapters: Optional[str] = None, 
+    db=Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    try:
+        # Clear existing cache entry
+        await db.execute(
+            "DELETE FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
+            board, class_num, subject
+        )
+        logger.info(f"Cleared syllabus cache for {board} Class {class_num} {subject}")
+
+        # Fetch fresh syllabus from OpenAI
+        syllabus = get_syllabus_from_openai(board, class_num, subject, missing_chapters)
+
+        # Cache the new response, even if empty
+        try:
+            await db.execute(
+                """
+                INSERT INTO syllabus_cache (board, class_num, subject, syllabus_data)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (board, class_num, subject)
+                DO UPDATE SET syllabus_data = EXCLUDED.syllabus_data, updated_at = CURRENT_TIMESTAMP
+                """,
+                board, class_num, subject, json.dumps(syllabus)
+            )
+            logger.info(f"Cached fresh syllabus for {board} Class {class_num} {subject}, chapters: {len(syllabus.get('chapters', []))}")
+        except asyncpg.exceptions.DataError as e:
+            logger.error(f"Database error while caching syllabus: {str(e)}")
+            # Continue to return syllabus even if caching fails
+
+        return {"syllabus": syllabus}
+    except asyncpg.exceptions.UndefinedTableError:
+        logger.error("Table syllabus_cache does not exist")
+        raise HTTPException(status_code=500, detail="Syllabus cache table is not set up in the database")
+    except Exception as e:
+        logger.error(f"Error regenerating syllabus: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error regenerating syllabus: {str(e)}")
 
 @app.post("/api/tutor/explain")
 async def explain_topic(explain_request: ExplainRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
@@ -1139,7 +1417,7 @@ async def chat_with_tutor(chat_request: ChatRequest, db=Depends(get_db), current
         Return only the response text, without any Markdown or code block formatting.
         """
         response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             messages=[{"role": "system", "content": prompt}],
             max_tokens=1000
         )
@@ -1211,3 +1489,286 @@ async def update_feedback(feedback: FeedbackRequest, db=Depends(get_db), current
     except Exception as e:
         logger.error(f"Error updating feedback: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error updating feedback: {str(e)}")
+
+
+@app.post("/api/previous-marks")
+async def store_previous_marks(
+    marks_request: PreviousMarksRequest,
+    db=Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    try:
+        user_id = current_user["id"]
+        marks_id = str(uuid.uuid4())
+        await db.execute(
+            """
+            INSERT INTO previous_marks (id, user_id, subject, last_exam, last_test, assignment, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+            marks_id, user_id, marks_request.subject, marks_request.lastExam,
+            marks_request.lastTest, marks_request.assignment, datetime.utcnow()
+        )
+        logger.info(f"Stored previous marks for user {user_id}, subject {marks_request.subject}")
+        return {"message": "Previous marks stored successfully", "marksId": marks_id}
+    except Exception as e:
+        logger.error(f"Failed to store previous marks: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to store previous marks: {str(e)}")
+
+
+@app.post("/api/quiz/generate")
+async def generate_quiz(quiz_request: QuizGenerateRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
+    try:
+        # Compute difficulty based on previousMarks
+        previous_marks = quiz_request.previousMarks
+        if previous_marks < 50:
+            difficulty = "beginner"
+        elif previous_marks <= 75:
+            difficulty = "intermediate"
+        else:
+            difficulty = "advanced"
+
+        # Fetch syllabus from cache
+        cached_syllabus = await db.fetchrow(
+            "SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
+            quiz_request.board, int(quiz_request.currentClass), quiz_request.subject
+        )
+        if not cached_syllabus:
+            logger.error(f"Syllabus not found for {quiz_request.board} Class {quiz_request.currentClass} {quiz_request.subject}")
+            raise HTTPException(status_code=404, detail="Syllabus not found for current class")
+
+        # Ensure syllabus_data is a dictionary
+        syllabus_data = cached_syllabus["syllabus_data"]
+        if isinstance(syllabus_data, str):
+            try:
+                syllabus_data = json.loads(syllabus_data)
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing syllabus_data: {str(e)}")
+                raise HTTPException(status_code=500, detail="Invalid syllabus data in cache")
+
+        # Extract chapters from syllabus_data
+        syllabus_chapters = [chapter["name"] for chapter in syllabus_data.get("chapters", [])]
+        valid_chapters = [chapter for chapter in quiz_request.chapters if chapter in syllabus_chapters]
+        if not valid_chapters:
+            logger.error(f"No valid chapters provided for quiz generation: {quiz_request.chapters}")
+            raise HTTPException(status_code=400, detail="No valid chapters provided for quiz generation")
+
+        # Generate quiz
+        quiz = create_quiz_from_openai(
+            quiz_request.board, int(quiz_request.currentClass), quiz_request.subject, valid_chapters, difficulty
+        )
+        if not quiz:
+            logger.error("Quiz generation returned empty quiz")
+            raise HTTPException(status_code=500, detail="Failed to generate quiz: No questions generated")
+
+        # Store quiz in database
+        user_id = current_user["id"]
+        quiz_id = str(uuid.uuid4())
+        await db.execute(
+            """
+            INSERT INTO quizzes (id, user_id, subject, board, class, difficulty, questions, created_at, goal)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            """,
+            quiz_id, user_id, quiz_request.subject, quiz_request.board, quiz_request.currentClass,
+            difficulty, json.dumps(quiz), datetime.utcnow(), quiz_request.goal
+        )
+        
+        logger.info(f"Generated quiz for user {user_id}, subject {quiz_request.subject}, quizId {quiz_id}")
+        return {"quiz": {"subject": quiz_request.subject, "questions": quiz}, "quizId": quiz_id}
+    except Exception as e:
+        logger.error(f"Failed to generate quiz: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate quiz: {str(e)}")
+
+@app.post("/api/quiz/submit")
+async def submit_quiz_results(quiz_results: QuizResultsRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
+    try:
+        user_id = current_user["id"]
+        quiz_id = str(uuid.uuid4())
+        score = sum(1 for result in quiz_results.results.values() if result)
+        total_questions = len(quiz_results.results)
+        percentage = (score / total_questions) * 100 if total_questions > 0 else 0
+
+        await db.execute(
+            """
+            INSERT INTO quiz_results (id, user_id, quiz_type, score, total_questions, percentage, results, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            quiz_id, user_id, quiz_results.quizType, score, total_questions, percentage,
+            json.dumps(quiz_results.results), datetime.utcnow()
+        )
+
+        return {
+            "message": "Quiz results submitted successfully",
+            "score": score,
+            "total_questions": total_questions,  # Added to match frontend expectation
+            "percentage": percentage,
+            "quizId": quiz_id
+        }
+    except Exception as e:
+        logger.error(f"Error submitting quiz results: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error submitting quiz results: {str(e)}")
+
+
+@app.post("/api/quiz/results")
+async def submit_quiz_results(
+    request: QuizResultsRequest,
+    db=Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    try:
+        user_id = current_user["id"]
+        quiz_id = str(uuid.uuid4())
+        await db.execute(
+            """
+            INSERT INTO quiz_results (id, user_id, quiz_type, results, created_at)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            quiz_id, user_id, request.quizType, json.dumps(request.results), datetime.utcnow()
+        )
+        logger.info(f"Quiz results submitted for user {user_id}, quiz type {request.quizType}")
+        return {"message": "Quiz results submitted successfully", "quizId": quiz_id}
+    except asyncpg.exceptions.UndefinedTableError:
+        logger.error("Table quiz_results does not exist")
+        raise HTTPException(status_code=500, detail="Quiz results table is not set up in the database")
+    except Exception as e:
+        logger.error(f"Failed to submit quiz results: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to submit quiz results: {str(e)}")
+
+
+
+@app.post("/api/study-plan")
+async def create_study_plan(plan_request: StudyPlanRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
+    try:
+        user_id = int(current_user["id"])
+        logger.info(f"user_id type: {type(user_id)}, value: {user_id}")
+
+        # Fetch syllabus from cache
+        cached_syllabus = await db.fetchrow(
+            "SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
+            current_user["board"] or "CBSE", int(current_user["class"] or 10), plan_request.subject
+        )
+        if not cached_syllabus:
+            logger.error(f"Syllabus not found for {current_user['board'] or 'CBSE'} Class {current_user['class'] or 10} {plan_request.subject}")
+            raise HTTPException(status_code=404, detail="Syllabus not found")
+
+        syllabus_data = cached_syllabus["syllabus_data"]
+        if isinstance(syllabus_data, str):
+            try:
+                syllabus = json.loads(syllabus_data)
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing syllabus_data: {str(e)}")
+                raise HTTPException(status_code=500, detail="Invalid syllabus data in cache")
+        else:
+            syllabus = syllabus_data
+
+        chapters = syllabus.get("chapters", [])
+        if not chapters:
+            logger.error(f"No chapters found for subject {plan_request.subject}")
+            raise HTTPException(status_code=400, detail="No chapters found for the study plan")
+
+        # Separate weak and non-weak chapters
+        weak_chapters = plan_request.weakChapters or []
+        weak_chapter_list = [chapter for chapter in chapters if chapter["name"] in weak_chapters]
+        other_chapters = [chapter for chapter in chapters if chapter["name"] not in weak_chapters]
+        prioritized_chapters = weak_chapter_list + other_chapters  # Weak chapters come first
+
+        if not prioritized_chapters:
+            logger.error(f"No matching chapters found for subject {plan_request.subject}")
+            raise HTTPException(status_code=400, detail="No matching chapters found for the study plan")
+
+        # Calculate number of weeks needed (e.g., 2-3 chapters per week)
+        chapters_per_week = 2
+        total_weeks = max(1, (len(prioritized_chapters) + chapters_per_week - 1) // chapters_per_week)
+
+        # Generate dynamic study plan
+        study_plan_data = {}
+        start_date = datetime.now().date()
+        for week in range(1, total_weeks + 1):
+            week_key = f"Week {week}"
+            study_plan_data[week_key] = []
+            # Select chapters for this week (up to chapters_per_week)
+            week_chapters = prioritized_chapters[(week-1)*chapters_per_week : week*chapters_per_week]
+            for chapter in week_chapters:
+                is_weak = chapter["name"] in weak_chapters
+                study_time = 3.0 if is_weak else 2.0  # More time for weak chapters
+                for topic in chapter.get("topics", [])[:2]:  # Limit to 2 topics per chapter
+                    study_plan_data[week_key].append({
+                        "date": (start_date + timedelta(days=(week-1)*7)).isoformat(),
+                        "chapter": chapter["name"],
+                        "topic": topic["name"],
+                        "subtopic": topic["subtopics"][0] if topic.get("subtopics") else "",
+                        "time": study_time,
+                        "completed": False
+                    })
+
+        # Validate study_plan_data
+        if not study_plan_data or not any(study_plan_data.values()):
+            logger.error("Generated study plan is empty")
+            raise HTTPException(status_code=500, detail="Failed to generate study plan: Empty plan data")
+
+        plan_id = uuid.uuid4()
+        created_at = datetime.utcnow()
+
+        # Store the plan in the database
+        await db.execute(
+            """
+            INSERT INTO study_plan (id, user_id, subject, plan_data, weak_chapters, plan_type, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+            plan_id, user_id, plan_request.subject, json.dumps(study_plan_data), 
+            plan_request.weakChapters, plan_request.planType, created_at
+        )
+
+        response = {
+            "studyPlan": {
+                "id": str(plan_id),
+                "userId": user_id,
+                "subject": plan_request.subject,
+                "planData": study_plan_data,
+                "weakChapters": plan_request.weakChapters or [],
+                "planType": plan_request.planType,
+                "createdAt": created_at.isoformat()
+            }
+        }
+
+        logger.info(f"Generated study plan response: {json.dumps(response, indent=2)}")
+        logger.info(f"Generated study plan for user {user_id}, subject {plan_request.subject}, planType {plan_request.planType}")
+
+        return response
+    except asyncpg.exceptions.UndefinedTableError:
+        logger.error("Table study_plan does not exist")
+        raise HTTPException(status_code=500, detail="Study plan table is not set up in the database")
+    except Exception as e:
+        logger.error(f"Failed to generate study plan: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate study plan: {str(e)}")
+    
+
+@app.post("/api/study-plan/create")
+async def create_study_plan(data: dict, db=Depends(get_db), token: str = Depends(oauth2_scheme)):
+    try:
+        user_id = 1  # Replace with actual user ID from token
+        quiz_results = data.get("quizResults", {})
+        wrong_topics = [q["id"] for q, result in quiz_results.items() if not result]
+        subjects = [{"subject": data["subject"], "chapter": c["name"], "topics": c["topics"]} for c in (await db.fetchrow(
+            "SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
+            data["board"], int(data["currentClass"]), data["subject"]
+        ))["syllabus_data"]["chapters"]] if (await db.fetchrow(
+            "SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
+            data["board"], int(data["currentClass"]), data["subject"]
+        )) else []
+        study_plan = generate_study_plan(subjects, wrong_topics)
+
+        plan_id = str(uuid.uuid4())
+        await db.execute(
+            """
+            INSERT INTO study_plan (id, user_id, subject, plan_data, weak_chapters, plan_type, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+            plan_id, user_id, data["subject"], json.dumps(study_plan), json.dumps(wrong_topics), data["planType"], datetime.utcnow()
+        )
+
+        return {"planId": plan_id, "plan": study_plan}
+    except Exception as e:
+        logger.error(f"Study plan creation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to create study plan")
+  
+

@@ -168,3 +168,63 @@ CREATE TABLE chat_history (
     class_num INTEGER,
     liked BOOLEAN
 );
+
+
+CREATE TABLE syllabus_cache (
+    id SERIAL PRIMARY KEY,
+    board VARCHAR(50) NOT NULL,
+    class_num INTEGER NOT NULL,
+    subject VARCHAR(100) NOT NULL,
+    syllabus_data JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (board, class_num, subject)
+);
+
+CREATE TABLE  IF NOT EXISTS study_plan (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id INTEGER REFERENCES users(id),
+    subject VARCHAR(100) NOT NULL,
+    plan_data JSONB NOT NULL,
+    weak_chapters TEXT[],
+    plan_type VARCHAR(50),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+CREATE TABLE previous_marks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id INTEGER REFERENCES users(id),
+    subject VARCHAR(100) NOT NULL,
+    last_exam FLOAT NOT NULL,
+    last_test FLOAT NOT NULL,
+    assignment FLOAT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+CREATE TABLE quizzes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id INTEGER REFERENCES users(id),
+    subject VARCHAR(100) NOT NULL,
+    board VARCHAR(50) NOT NULL,
+    class VARCHAR(10) NOT NULL,
+    difficulty VARCHAR(20) NOT NULL,
+    questions JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    goal VARCHAR(50)
+);
+
+CREATE TABLE quiz_results (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id INTEGER REFERENCES users(id),
+    quiz_type VARCHAR(50) NOT NULL,
+    results JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE quiz_results
+ADD COLUMN IF NOT EXISTS score INTEGER,
+ADD COLUMN IF NOT EXISTS total_questions INTEGER,
+ADD COLUMN IF NOT EXISTS percentage FLOAT;
