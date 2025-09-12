@@ -1,0 +1,876 @@
+[
+    {
+        "user_id": "student_class5_001",
+        "board": "CBSE",
+        "class": "5",
+        "target_score": 85,
+        "exam_date": "2025-03-20",
+        "test_history": [],
+        "study_sessions": [
+            {
+                "date": "2025-09-10",
+                "duration": 45,
+                "subjects": [
+                    "Mathematics",
+                    "EVS"
+                ]
+            },
+            {
+                "date": "2025-09-11",
+                "duration": 30,
+                "subjects": [
+                    "English",
+                    "Hindi"
+                ]
+            }
+        ],
+        "performance_log": [
+            {
+                "timestamp": "2025-09-10T14:30:00Z",
+                "subject": "Mathematics",
+                "topic": "Large Numbers",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-10T14:35:00Z",
+                "subject": "Mathematics",
+                "topic": "Addition and Subtraction",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-10T14:40:00Z",
+                "subject": "EVS",
+                "topic": "Super Senses",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-10T14:45:00Z",
+                "subject": "EVS",
+                "topic": "A Snake Charmer's Story",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-11T16:20:00Z",
+                "subject": "English",
+                "topic": "Ice Cream Man",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-11T16:25:00Z",
+                "subject": "Hindi",
+                "topic": "\u0930\u093e\u0916 \u0915\u0940 \u0930\u0938\u094d\u0938\u0940",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T09:15:00Z",
+                "subject": "Mathematics",
+                "topic": "Shapes and Angles",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T09:20:00Z",
+                "subject": "EVS",
+                "topic": "From Tasting to Digesting",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T09:25:00Z",
+                "subject": "English",
+                "topic": "Teamwork",
+                "is_correct": true
+            }
+        ],
+        "performance_data_per_subject": {
+            "Mathematics": {
+                "Large Numbers": {
+                    "correct": 7,
+                    "total": 8
+                },
+                "Addition and Subtraction": {
+                    "correct": 5,
+                    "total": 9
+                },
+                "Shapes and Angles": {
+                    "correct": 6,
+                    "total": 7
+                },
+                "Fractions": {
+                    "correct": 4,
+                    "total": 6
+                }
+            },
+            "EVS": {
+                "Super Senses": {
+                    "correct": 8,
+                    "total": 10
+                },
+                "A Snake Charmer's Story": {
+                    "correct": 7,
+                    "total": 8
+                },
+                "From Tasting to Digesting": {
+                    "correct": 3,
+                    "total": 7
+                },
+                "Experiments with Water": {
+                    "correct": 9,
+                    "total": 12
+                }
+            },
+            "English": {
+                "Ice Cream Man": {
+                    "correct": 4,
+                    "total": 8
+                },
+                "Teamwork": {
+                    "correct": 6,
+                    "total": 7
+                },
+                "Robinson Crusoe": {
+                    "correct": 5,
+                    "total": 6
+                }
+            },
+            "Hindi": {
+                "\u0930\u093e\u0916 \u0915\u0940 \u0930\u0938\u094d\u0938\u0940": {
+                    "correct": 7,
+                    "total": 9
+                },
+                "\u0915\u0948\u0938\u0947 \u092a\u0939\u0941\u0902\u091a\u0940 \u091a\u093f\u0921\u093c\u093f\u092f\u093e \u0918\u0930 \u092e\u0947\u0902": {
+                    "correct": 6,
+                    "total": 8
+                }
+            }
+        }
+    },
+    {
+        "user_id": "student_class7_002",
+        "board": "CBSE",
+        "class": "7",
+        "target_score": 90,
+        "exam_date": "2025-03-18",
+        "test_history": [],
+        "study_sessions": [
+            {
+                "date": "2025-09-09",
+                "duration": 60,
+                "subjects": [
+                    "Science",
+                    "Mathematics"
+                ]
+            },
+            {
+                "date": "2025-09-11",
+                "duration": 75,
+                "subjects": [
+                    "Social Science",
+                    "English"
+                ]
+            },
+            {
+                "date": "2025-09-12",
+                "duration": 50,
+                "subjects": [
+                    "Hindi",
+                    "Science"
+                ]
+            }
+        ],
+        "performance_log": [
+            {
+                "timestamp": "2025-09-09T15:00:00Z",
+                "subject": "Science",
+                "topic": "Nutrition in Plants",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-09T15:05:00Z",
+                "subject": "Science",
+                "topic": "Heat",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-09T15:10:00Z",
+                "subject": "Mathematics",
+                "topic": "Integers",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-11T17:30:00Z",
+                "subject": "Social Science",
+                "topic": "Tracing Changes Through a Thousand Years",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-11T17:35:00Z",
+                "subject": "English",
+                "topic": "The Squirrel",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T14:15:00Z",
+                "subject": "Hindi",
+                "topic": "\u0939\u092e \u092a\u0902\u091b\u0940 \u0909\u0928\u094d\u092e\u0941\u0915\u094d\u0924 \u0917\u0917\u0928 \u0915\u0947",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T14:20:00Z",
+                "subject": "Science",
+                "topic": "Acids, Bases and Salts",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T14:25:00Z",
+                "subject": "Mathematics",
+                "topic": "Fractions and Decimals",
+                "is_correct": false
+            }
+        ],
+        "performance_data_per_subject": {
+            "Science": {
+                "Nutrition in Plants": {
+                    "correct": 12,
+                    "total": 15
+                },
+                "Heat": {
+                    "correct": 6,
+                    "total": 11
+                },
+                "Acids, Bases and Salts": {
+                    "correct": 9,
+                    "total": 12
+                },
+                "Physical and Chemical Changes": {
+                    "correct": 10,
+                    "total": 13
+                },
+                "Weather, Climate and Adaptations": {
+                    "correct": 8,
+                    "total": 10
+                }
+            },
+            "Mathematics": {
+                "Integers": {
+                    "correct": 14,
+                    "total": 16
+                },
+                "Fractions and Decimals": {
+                    "correct": 7,
+                    "total": 12
+                },
+                "Simple Equations": {
+                    "correct": 11,
+                    "total": 14
+                },
+                "Lines and Angles": {
+                    "correct": 13,
+                    "total": 15
+                }
+            },
+            "Social Science": {
+                "Tracing Changes Through a Thousand Years": {
+                    "correct": 8,
+                    "total": 10
+                },
+                "Our Pasts - II": {
+                    "correct": 7,
+                    "total": 9
+                },
+                "Our Environment": {
+                    "correct": 9,
+                    "total": 11
+                },
+                "Human Environment": {
+                    "correct": 6,
+                    "total": 8
+                }
+            },
+            "English": {
+                "The Squirrel": {
+                    "correct": 5,
+                    "total": 8
+                },
+                "A Gift of Chappals": {
+                    "correct": 7,
+                    "total": 9
+                },
+                "Gopal and the Hilsa Fish": {
+                    "correct": 8,
+                    "total": 10
+                }
+            },
+            "Hindi": {
+                "\u0939\u092e \u092a\u0902\u091b\u0940 \u0909\u0928\u094d\u092e\u0941\u0915\u094d\u0924 \u0917\u0917\u0928 \u0915\u0947": {
+                    "correct": 9,
+                    "total": 11
+                },
+                "\u0926\u093e\u0926\u0940 \u092e\u093e\u0901": {
+                    "correct": 8,
+                    "total": 10
+                },
+                "\u0939\u093f\u092e\u093e\u0932\u092f \u0915\u0940 \u092c\u0947\u091f\u093f\u092f\u093e\u0901": {
+                    "correct": 6,
+                    "total": 8
+                }
+            }
+        }
+    },
+    {
+        "user_id": "student_class10_003",
+        "board": "CBSE",
+        "class": "10",
+        "target_score": 95,
+        "exam_date": "2025-03-15",
+        "test_history": [
+            {
+                "timestamp": "2025-09-12T12:23:18.846865Z",
+                "subject": "Mathematics",
+                "score": 1,
+                "total_questions": 4,
+                "type": "Subject Test",
+                "topic": null
+            },
+            {
+                "timestamp": "2025-09-12T12:25:39.671195Z",
+                "subject": "Mathematics",
+                "score": 1,
+                "total_questions": 5,
+                "type": "Subject Test",
+                "topic": null
+            }
+        ],
+        "study_sessions": [
+            {
+                "date": "2025-09-08",
+                "duration": 90,
+                "subjects": [
+                    "Mathematics",
+                    "Science"
+                ]
+            },
+            {
+                "date": "2025-09-10",
+                "duration": 120,
+                "subjects": [
+                    "Social Science",
+                    "English",
+                    "Hindi"
+                ]
+            },
+            {
+                "date": "2025-09-12",
+                "duration": 100,
+                "subjects": [
+                    "Science",
+                    "Mathematics"
+                ]
+            }
+        ],
+        "performance_log": [
+            {
+                "timestamp": "2025-09-08T16:00:00Z",
+                "subject": "Mathematics",
+                "topic": "Real Numbers",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-08T16:05:00Z",
+                "subject": "Science",
+                "topic": "Light - Reflection and Refraction",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-08T16:10:00Z",
+                "subject": "Science",
+                "topic": "Carbon and its Compounds",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-10T18:00:00Z",
+                "subject": "Social Science",
+                "topic": "The Rise of Nationalism in Europe",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-10T18:05:00Z",
+                "subject": "English",
+                "topic": "A Letter to God",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-10T18:10:00Z",
+                "subject": "Hindi",
+                "topic": "\u0938\u0942\u0930\u0926\u093e\u0938 \u0915\u0947 \u092a\u0926",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T19:30:00Z",
+                "subject": "Science",
+                "topic": "Acids, Bases and Salts",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T19:35:00Z",
+                "subject": "Mathematics",
+                "topic": "Quadratic Equations",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T19:40:00Z",
+                "subject": "Science",
+                "topic": "Life Processes",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T11:46:46.978737Z",
+                "subject": "Science",
+                "topic": "Refraction of Light",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:46:49.928717Z",
+                "subject": "Science",
+                "topic": "Control and Coordination",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:46:52.892812Z",
+                "subject": "Science",
+                "topic": "Carbon and Its Compounds",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:46:55.939919Z",
+                "subject": "Science",
+                "topic": "Reflection by Concave Mirrors",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:46:59.095773Z",
+                "subject": "Science",
+                "topic": "Carbon and Its Compounds",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:47:01.861730Z",
+                "subject": "Science",
+                "topic": "Control and Coordination",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:47:04.826290Z",
+                "subject": "Science",
+                "topic": "Refraction of Light",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T11:47:08.207771Z",
+                "subject": "Science",
+                "topic": "Carbon and Its Compounds",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:47:11.426928Z",
+                "subject": "Science",
+                "topic": "Light - Reflection and Refraction",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:47:14.835098Z",
+                "subject": "Science",
+                "topic": "Light - Reflection and Refraction",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:52:16.260071Z",
+                "subject": "Science",
+                "topic": "Reflection of Light",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:52:19.156022Z",
+                "subject": "Science",
+                "topic": "Image Formation in Plane Mirror",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:52:22.184158Z",
+                "subject": "Science",
+                "topic": "Refraction of Light",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:52:26.142672Z",
+                "subject": "Science",
+                "topic": "Refraction and Refractive Index",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:52:29.215633Z",
+                "subject": "Science",
+                "topic": "Lenses and Image Formation",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:55:43.858795Z",
+                "subject": "Science",
+                "topic": "Carbon and Its Compounds",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:55:46.929506Z",
+                "subject": "Science",
+                "topic": "Reflection by Concave Mirrors",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T11:55:49.990152Z",
+                "subject": "Science",
+                "topic": "Reflection of Light",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:55:53.020936Z",
+                "subject": "Science",
+                "topic": "Carbon and Its Compounds",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T11:55:55.774388Z",
+                "subject": "Science",
+                "topic": "Reflection by Concave Mirrors",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:01:39.419345Z",
+                "subject": "Mathematics",
+                "topic": "Quadratic Equations",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T12:01:45.312168Z",
+                "subject": "Mathematics",
+                "topic": "Arithmetic Progressions",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:01:48.674942Z",
+                "subject": "Mathematics",
+                "topic": "Coordinate Geometry",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:01:51.630271Z",
+                "subject": "Mathematics",
+                "topic": "Quadratic Equations",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:01:54.701032Z",
+                "subject": "Mathematics",
+                "topic": "Arithmetic Progressions",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:03:23.248222Z",
+                "subject": "Mathematics",
+                "topic": "Properties of Isosceles Triangles",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:03:26.399996Z",
+                "subject": "Mathematics",
+                "topic": "Properties of Isosceles Triangles",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:03:30.866313Z",
+                "subject": "Mathematics",
+                "topic": "Angles in Isosceles Triangles",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:03:34.721215Z",
+                "subject": "Mathematics",
+                "topic": "Angles in Triangles",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:03:37.843418Z",
+                "subject": "Mathematics",
+                "topic": "Properties of Isosceles Triangles",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:07:33.620952Z",
+                "subject": "Mathematics",
+                "topic": "Real Numbers",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:07:36.833740Z",
+                "subject": "Mathematics",
+                "topic": "Real Numbers",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:07:39.819873Z",
+                "subject": "Mathematics",
+                "topic": "Real Numbers",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:07:42.849620Z",
+                "subject": "Mathematics",
+                "topic": "Real Numbers",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T12:07:46.289334Z",
+                "subject": "Mathematics",
+                "topic": "Real Numbers",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T12:13:16.751573Z",
+                "subject": "Mathematics",
+                "topic": "Classification of Real Numbers",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T12:13:21.845458Z",
+                "subject": "Mathematics",
+                "topic": "Classification of Real Numbers",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T12:13:33.470457Z",
+                "subject": "Mathematics",
+                "topic": "Square Roots",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T12:13:38.147958Z",
+                "subject": "Mathematics",
+                "topic": "Properties of Rational Numbers",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:13:41.702270Z",
+                "subject": "Mathematics",
+                "topic": "Terminating and Non-terminating Decimals",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:23:08.264982Z",
+                "subject": "Mathematics",
+                "topic": "Angles in Isosceles Triangles",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:23:11.300686Z",
+                "subject": "Mathematics",
+                "topic": "Angles in Isosceles Triangles",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:23:14.229725Z",
+                "subject": "Mathematics",
+                "topic": "Properties of Isosceles Triangles",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:23:17.129648Z",
+                "subject": "Mathematics",
+                "topic": "Angles in Triangles",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T12:25:25.289061Z",
+                "subject": "Mathematics",
+                "topic": "Angles in Isosceles Triangles",
+                "is_correct": true
+            },
+            {
+                "timestamp": "2025-09-12T12:25:28.231223Z",
+                "subject": "Mathematics",
+                "topic": "Properties of Isosceles Triangles",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:25:31.760201Z",
+                "subject": "Mathematics",
+                "topic": "Properties of Rational Numbers",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:25:35.028183Z",
+                "subject": "Mathematics",
+                "topic": "Properties of Rational Numbers",
+                "is_correct": false
+            },
+            {
+                "timestamp": "2025-09-12T12:25:37.962047Z",
+                "subject": "Mathematics",
+                "topic": "Angles in Isosceles Triangles",
+                "is_correct": false
+            }
+        ],
+        "performance_data_per_subject": {
+            "Mathematics": {
+                "Real Numbers": {
+                    "correct": 17,
+                    "total": 23
+                },
+                "Quadratic Equations": {
+                    "correct": 9,
+                    "total": 16
+                },
+                "Arithmetic Progressions": {
+                    "correct": 12,
+                    "total": 18
+                },
+                "Triangles": {
+                    "correct": 13,
+                    "total": 15
+                },
+                "Coordinate Geometry": {
+                    "correct": 9,
+                    "total": 13
+                },
+                "Properties of Isosceles Triangles": {
+                    "correct": 0,
+                    "total": 5
+                },
+                "Angles in Isosceles Triangles": {
+                    "correct": 1,
+                    "total": 5
+                },
+                "Angles in Triangles": {
+                    "correct": 1,
+                    "total": 2
+                },
+                "Classification of Real Numbers": {
+                    "correct": 2,
+                    "total": 2
+                },
+                "Square Roots": {
+                    "correct": 1,
+                    "total": 1
+                },
+                "Properties of Rational Numbers": {
+                    "correct": 0,
+                    "total": 3
+                },
+                "Terminating and Non-terminating Decimals": {
+                    "correct": 0,
+                    "total": 1
+                }
+            },
+            "Science": {
+                "Light - Reflection and Refraction": {
+                    "correct": 7,
+                    "total": 17
+                },
+                "Carbon and its Compounds": {
+                    "correct": 11,
+                    "total": 14
+                },
+                "Acids, Bases and Salts": {
+                    "correct": 13,
+                    "total": 16
+                },
+                "Life Processes": {
+                    "correct": 14,
+                    "total": 17
+                },
+                "Control and Coordination": {
+                    "correct": 10,
+                    "total": 15
+                },
+                "Refraction of Light": {
+                    "correct": 1,
+                    "total": 3
+                },
+                "Carbon and Its Compounds": {
+                    "correct": 0,
+                    "total": 5
+                },
+                "Reflection by Concave Mirrors": {
+                    "correct": 1,
+                    "total": 3
+                },
+                "Reflection of Light": {
+                    "correct": 0,
+                    "total": 2
+                },
+                "Image Formation in Plane Mirror": {
+                    "correct": 0,
+                    "total": 1
+                },
+                "Refraction and Refractive Index": {
+                    "correct": 0,
+                    "total": 1
+                },
+                "Lenses and Image Formation": {
+                    "correct": 0,
+                    "total": 1
+                }
+            },
+            "Social Science": {
+                "The Rise of Nationalism in Europe": {
+                    "correct": 12,
+                    "total": 15
+                },
+                "Resources and Development": {
+                    "correct": 9,
+                    "total": 12
+                },
+                "Power Sharing": {
+                    "correct": 11,
+                    "total": 14
+                },
+                "Federalism": {
+                    "correct": 10,
+                    "total": 13
+                }
+            },
+            "English": {
+                "A Letter to God": {
+                    "correct": 6,
+                    "total": 10
+                },
+                "Nelson Mandela: Long Walk to Freedom": {
+                    "correct": 8,
+                    "total": 11
+                },
+                "Two Stories about Flying": {
+                    "correct": 7,
+                    "total": 9
+                },
+                "From the Diary of Anne Frank": {
+                    "correct": 9,
+                    "total": 12
+                }
+            },
+            "Hindi": {
+                "\u0938\u0942\u0930\u0926\u093e\u0938 \u0915\u0947 \u092a\u0926": {
+                    "correct": 11,
+                    "total": 14
+                },
+                "\u0930\u093e\u092e-\u0932\u0915\u094d\u0937\u094d\u092e\u0923-\u092a\u0930\u0936\u0941\u0930\u093e\u092e \u0938\u0902\u0935\u093e\u0926": {
+                    "correct": 8,
+                    "total": 11
+                },
+                "\u0938\u0935\u0948\u092f\u093e \u0914\u0930 \u0915\u0935\u093f\u0924\u094d\u0924": {
+                    "correct": 9,
+                    "total": 12
+                },
+                "\u0906\u0924\u094d\u092e\u0915\u0925\u094d\u092f": {
+                    "correct": 7,
+                    "total": 10
+                }
+            }
+        }
+    }
+]
