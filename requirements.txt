@@ -8,3 +8,8 @@ openai==0.28.1
 Werkzeug==2.3.7
 fastapi
 uvicorn[standard]
+passlib[bcrypt]
+python-jose[cryptography]
+sqlalchemy
+pydantic
+python-multipart
