@@ -138,7 +138,7 @@ TABLES = {
             trend VARCHAR(50),
             UNIQUE (user_id, subject)
         );
-    """
+    """,
     "streaks": """
         CREATE TABLE IF NOT EXISTS streaks (
             user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
