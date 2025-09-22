@@ -139,6 +139,37 @@ TABLES = {
             UNIQUE (user_id, subject)
         );
     """
+    "streaks": """
+        CREATE TABLE IF NOT EXISTS streaks (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            streak INTEGER DEFAULT 0,
+            xp INTEGER DEFAULT 0,
+            badges JSONB,
+            last_updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+    """,
+    "daily_goals": """
+        CREATE TABLE IF NOT EXISTS daily_goals (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            task TEXT NOT NULL,
+            completed BOOLEAN DEFAULT FALSE,
+            xp INTEGER DEFAULT 0,
+            created_at DATE DEFAULT CURRENT_DATE
+        );
+    """,
+    "achievements": """
+        CREATE TABLE IF NOT EXISTS achievements (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            icon VARCHAR(100),
+            xp INTEGER DEFAULT 0,
+            earned BOOLEAN DEFAULT FALSE,
+            earned_at TIMESTAMP WITH TIME ZONE
+        );
+    """
 }
 
 async def create_tables():
