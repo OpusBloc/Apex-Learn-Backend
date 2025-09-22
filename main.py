@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 app = FastAPI()
 
 # CORS middleware
@@ -42,20 +44,35 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 1
 
-# Database connection
+# # Database connection
+# async def get_db():
+#     try:
+#         conn = await asyncpg.connect(
+#             user='postgres',
+#             password='admin',
+#             database='edututor',
+#             host='localhost'
+#         )
+#         try:
+#             yield conn
+#         finally:
+#             await conn.close()
+#     except asyncpg.exceptions.ConnectionDoesNotExistError as e:
+#         logger.error(f"Database connection failed: {str(e)}")
+#         raise HTTPException(status_code=500, detail="Failed to connect to the database")
+
+# NEW get_db function
 async def get_db():
+    if not DATABASE_URL:
+        raise HTTPException(status_code=500, detail="DATABASE_URL environment variable is not set.")
+    
     try:
-        conn = await asyncpg.connect(
-            user='postgres',
-            password='admin',
-            database='edututor',
-            host='localhost'
-        )
+        conn = await asyncpg.connect(DATABASE_URL)
         try:
             yield conn
         finally:
             await conn.close()
-    except asyncpg.exceptions.ConnectionDoesNotExistError as e:
+    except Exception as e:
         logger.error(f"Database connection failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to connect to the database")
 
