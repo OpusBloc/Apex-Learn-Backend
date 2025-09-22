@@ -9,6 +9,7 @@ Werkzeug==2.3.7
 fastapi
 uvicorn[standard]
 passlib[bcrypt]
+bcrypt
 python-jose[cryptography]
 sqlalchemy
 pydantic
