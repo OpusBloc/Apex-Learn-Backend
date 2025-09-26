@@ -1,3 +1,4 @@
+from urllib import response
 from fastapi import FastAPI, HTTPException, Depends, Request # pyright: ignore[reportMissingImports]
 from fastapi.security import OAuth2PasswordBearer # pyright: ignore[reportMissingImports]
 from fastapi.middleware.cors import CORSMiddleware # pyright: ignore[reportMissingImports]
@@ -7,6 +8,7 @@ from jose import JWTError, jwt # pyright: ignore[reportMissingModuleSource]
 from datetime import datetime, timedelta
 import asyncpg # pyright: ignore[reportMissingImports]
 from typing import Optional, List
+from googleapiclient.discovery import build
 import os
 from dotenv import load_dotenv # pyright: ignore[reportMissingImports]
 import json
@@ -18,6 +20,10 @@ import string
 import uuid
 import secrets
 from openai import OpenAI
+from _config import COURSE_CATALOG
+from _prompts import get_system_prompt
+from mock_services import generate_mock_test, evaluate_student_answers
+from fastapi import UploadFile, File
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -105,9 +111,22 @@ class QuizRequest(BaseModel):
     subject: str
     level: str
 
+class DocumentChatRequest(BaseModel):
+    message: str
+    selected_filenames: List[str]
+
+class DocumentListResponse(BaseModel):
+    filenames: List[str]
+
+# class StudyPlanRequest(BaseModel):
+#     subject: str
+#     weakChapters: List[str]
+    
 class StudyPlanRequest(BaseModel):
-    subject: str
-    weakChapters: List[str]
+    subject: str # For school, this is 'Mathematics'. For college, it can be the specialization 'CSE'.
+    planType: str
+    weakChapters: Optional[List[str]] = None # Used for school
+    focusSubjects: Optional[List[str]] = None # Use this for college
 
 class ExplainRequest(BaseModel):
     board: str
@@ -299,6 +318,18 @@ class RemediationRequest(BaseModel):
 class StudentRemediationRequest(BaseModel):
     student_name: str
     performance_summary: str
+    
+class MockTestRequest(BaseModel):
+    board: str
+    student_class: str
+    subject: str
+    topic: Optional[str] = None
+    question_count: int = 10
+
+class MockTestSubmissionRequest(BaseModel):
+    test_id: str
+    answers: dict # e.g., {"0": "Answer A", "1": "Photosynthesis"}
+    
 
 # Authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -374,6 +405,65 @@ You are a supportive, patient, and helpful AI tutor for students in India, speci
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Helper functions
+
+def generate_college_semester_plan(subjects: List[str], focus_subjects: List[str]) -> dict:
+    """
+    Generates a simple 16-week semester plan for a college student.
+    It prioritizes the first 4-5 core subjects.
+    """
+    plan = {}
+    weeks_per_subject = 4
+    # Prioritize focus_subjects if provided, otherwise take the first few from the catalog
+    subjects_to_plan = focus_subjects if focus_subjects else subjects[:4]
+
+    for i, subject in enumerate(subjects_to_plan):
+        start_week = (i * weeks_per_subject) + 1
+        for week_num in range(start_week, start_week + weeks_per_subject):
+            week_key = f"Week {week_num}"
+            if week_key not in plan:
+                plan[week_key] = []
+            
+            plan[week_key].append({
+                "date": (datetime.now().date() + timedelta(weeks=week_num-1)).isoformat(),
+                "subject": subject,
+                "task": f"Study core concepts of {subject}",
+                "duration_hours": 8.0, # Suggested hours per week for a subject
+                "completed": False
+            })
+    return plan
+
+#image search function using Google Custom Search API
+def search_web_for_image(query: str) -> Optional[str]:
+    """
+    Searches the web for an image using the Google Custom Search API.
+    """
+    try:
+        # --- FIX: Load the environment variables inside the function ---
+        GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+        GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
+
+        if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+            logger.error("Google API credentials are not configured in the .env file.")
+            return None
+
+        service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
+        res = service.cse().list(
+            q=query,
+            cx=GOOGLE_CSE_ID,
+            searchType='image',
+            num=1,
+            safe='high'
+        ).execute()
+
+        if 'items' in res and len(res['items']) > 0:
+            return res['items'][0]['link']
+        else:
+            logger.warning(f"No image found for query: {query}")
+            return None
+    except Exception as e:
+        logger.error(f"Google Image Search Error: {e}", exc_info=True)
+        return None
+
 
 # Load subjects from subject_cache.json
 def load_subject_cache():
@@ -636,17 +726,18 @@ def create_quiz_from_openai(board: str, class_num: int, subject: str, chapters: 
                 raise Exception(f"Failed to generate quiz: {str(e)}")
     raise Exception("Failed to generate quiz after maximum attempts")
 
+# Replace your old AITeacherAssistant class with this one
 
-# Add this class after your existing imports and before the routes
 class AITeacherAssistant:
     def __init__(self, model="gpt-4o-mini"):
-        # if not openai.api_key:
-        #     raise ValueError("OPENAI_API_KEY not found.")
+        # Use the asynchronous client for all API calls
+        self.async_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = model
 
-    def _get_json_response(self, system_prompt: str, user_prompt: str) -> dict:
+    async def _get_json_response(self, system_prompt: str, user_prompt: str) -> dict:
         try:
-            response = client.chat.completions.create(
+            # Await the asynchronous API call
+            response = await self.async_client.chat.completions.create(
                 model=self.model,
                 response_format={"type": "json_object"},
                 messages=[
@@ -658,10 +749,10 @@ class AITeacherAssistant:
             content = response.choices[0].message.content
             return json.loads(content)
         except Exception as e:
-            logger.error(f"AI API or JSON parsing error: {e}")
+            logger.error(f"AI API or JSON parsing error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"AI API error: {str(e)}")
 
-    def generate_mixed_worksheet(self, standard: str, board: str, subject: str, topic: str, difficulty: str, num_questions: int) -> dict:
+    async def generate_mixed_worksheet(self, standard: str, board: str, subject: str, topic: str, difficulty: str, num_questions: int) -> dict:
         system_prompt = (
             "You are an expert curriculum designer for the Indian education system. "
             "Generate a worksheet in JSON format with a root key 'worksheet' containing a list of question objects. "
@@ -675,9 +766,9 @@ class AITeacherAssistant:
             f"Mix Multiple Choice (MCQs), Fill-in-the-blanks, and Short Answer questions. "
             f"Return a valid JSON object with 'worksheet' as the root key."
         )
-        return self._get_json_response(system_prompt, user_prompt)
+        return await self._get_json_response(system_prompt, user_prompt)
 
-    def generate_adaptive_worksheet(self, standard: str, board: str, subject: str, topic: str, difficulty: str, num_questions: int, performance_summary: str) -> dict:
+    async def generate_adaptive_worksheet(self, standard: str, board: str, subject: str, topic: str, difficulty: str, num_questions: int, performance_summary: str) -> dict:
         system_prompt = (
             "You are an expert curriculum designer for the Indian education system. "
             "Generate an adaptive worksheet in JSON format with a root key 'worksheet' containing a list of question objects. "
@@ -690,9 +781,9 @@ class AITeacherAssistant:
             f"Focus on areas of weakness: {performance_summary}. "
             f"Return a valid JSON object with 'worksheet' as the root key."
         )
-        return self._get_json_response(system_prompt, user_prompt)
+        return await self._get_json_response(system_prompt, user_prompt)
 
-    def get_semantic_grade_and_feedback(self, question: str, student_answer: str, correct_answer: str) -> dict:
+    async def get_semantic_grade_and_feedback(self, question: str, student_answer: str, correct_answer: str) -> dict:
         system_prompt = (
             "You are a strict but fair grading assistant. Evaluate if a student's answer is semantically correct. "
             "If the core concept is wrong, mark as 'Incorrect'. If correct but with minor issues, mark as 'Correct' and note the issue. "
@@ -704,9 +795,9 @@ class AITeacherAssistant:
             f"Correct Answer: \"{correct_answer}\"\n"
             f"Return JSON with 'grade' and 'feedback'."
         )
-        return self._get_json_response(system_prompt, user_prompt)
+        return await self._get_json_response(system_prompt, user_prompt)
 
-    def generate_performance_overview(self, student_name: str, topic: str, all_feedback: List[dict]) -> str:
+    async def generate_performance_overview(self, student_name: str, topic: str, all_feedback: List[dict]) -> str:
         system_prompt = (
             "You are a kind, motivational AI tutor. Provide encouraging feedback to a student based on worksheet performance. "
             "Address the student by name, start with positive reinforcement, explain mistakes gently, and end with encouragement."
@@ -721,7 +812,7 @@ class AITeacherAssistant:
             f"Explain core concepts simply and end with encouragement."
         )
         try:
-            response = client.chat.completions.create(
+            response = await self.async_client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
             )
@@ -730,7 +821,7 @@ class AITeacherAssistant:
             logger.error(f"Error generating performance overview: {e}")
             return f"Great effort, {student_name}! Keep practicing {topic} and you'll see improvement soon."
 
-    def validate_topic_for_subject(self, standard: str, board: str, subject: str, topic: str) -> bool:
+    async def validate_topic_for_subject(self, standard: str, board: str, subject: str, topic: str) -> bool:
         system_prompt = (
             "Validate if a topic is relevant to a subject for a specific grade and board in the Indian education system. "
             "Return only 'Valid' or 'Invalid'."
@@ -740,7 +831,7 @@ class AITeacherAssistant:
             f"Respond with only 'Valid' or 'Invalid'."
         )
         try:
-            response = client.chat.completions.create(
+            response = await self.async_client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.0,
@@ -750,7 +841,7 @@ class AITeacherAssistant:
         except Exception:
             return False
 
-    def generate_class_remediation_plan(self, topic: str, error_count: int, student_count: int) -> str:
+    async def generate_class_remediation_plan(self, topic: str, error_count: int, student_count: int) -> str:
         system_prompt = (
             "You are an educational strategist. Provide actionable remediation suggestions for a teacher to help students improve."
         )
@@ -760,7 +851,7 @@ class AITeacherAssistant:
             f"Provide 3-4 practical suggestions (e.g., review session, group activity, targeted worksheet)."
         )
         try:
-            response = client.chat.completions.create(
+            response = await self.async_client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
             )
@@ -769,7 +860,7 @@ class AITeacherAssistant:
             logger.error(f"Error generating class remediation plan: {e}")
             return f"- Schedule a focused review session on {topic}\n- Create targeted practice worksheets\n- Use visual aids and real-life examples\n- Pair students for peer teaching"
 
-    def generate_student_remediation_plan(self, student_name: str, performance_summary: str) -> str:
+    async def generate_student_remediation_plan(self, student_name: str, performance_summary: str) -> str:
         system_prompt = (
             "You are a compassionate AI counselor. Create a personalized, encouraging remediation plan for a struggling student."
         )
@@ -779,7 +870,7 @@ class AITeacherAssistant:
             f"Include 2-3 steps: a conceptual review, a targeted activity, and an encouraging remark."
         )
         try:
-            response = client.chat.completions.create(
+            response = await self.async_client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
             )
@@ -787,6 +878,158 @@ class AITeacherAssistant:
         except Exception as e:
             logger.error(f"Error generating student remediation plan: {e}")
             return f"1. Review the key concepts with {student_name} one-on-one\n2. Create a targeted practice worksheet\n3. {student_name}, you're making progress - keep going!"
+
+
+# # Add this class after your existing imports and before the routes
+# class AITeacherAssistant:
+#     def __init__(self, model="gpt-4o-mini"):
+#         # if not openai.api_key:
+#         #     raise ValueError("OPENAI_API_KEY not found.")
+#         self.model = model
+
+#     def _get_json_response(self, system_prompt: str, user_prompt: str) -> dict:
+#         try:
+#             response = client.chat.completions.create(
+#                 model=self.model,
+#                 response_format={"type": "json_object"},
+#                 messages=[
+#                     {"role": "system", "content": system_prompt},
+#                     {"role": "user", "content": user_prompt},
+#                 ],
+#                 temperature=0.7,
+#             )
+#             content = response.choices[0].message.content
+#             return json.loads(content)
+#         except Exception as e:
+#             logger.error(f"AI API or JSON parsing error: {e}")
+#             raise HTTPException(status_code=500, detail=f"AI API error: {str(e)}")
+
+#     def generate_mixed_worksheet(self, standard: str, board: str, subject: str, topic: str, difficulty: str, num_questions: int) -> dict:
+#         system_prompt = (
+#             "You are an expert curriculum designer for the Indian education system. "
+#             "Generate a worksheet in JSON format with a root key 'worksheet' containing a list of question objects. "
+#             "Each question has 'type' ('mcq', 'fill_in_the_blank', or 'short_answer'), 'question', and 'answer'. "
+#             "For 'mcq', include 'options' with 4 strings. For 'fill_in_the_blank', use '____' for the blank. "
+#             "Questions must be based on the official syllabus for the specified standard and board."
+#         )
+#         user_prompt = (
+#             f"Generate a worksheet with {num_questions} questions for Class {standard} ({board} board) in {subject}. "
+#             f"Topic: '{topic}'. Difficulty: {difficulty}. "
+#             f"Mix Multiple Choice (MCQs), Fill-in-the-blanks, and Short Answer questions. "
+#             f"Return a valid JSON object with 'worksheet' as the root key."
+#         )
+#         return self._get_json_response(system_prompt, user_prompt)
+
+#     def generate_adaptive_worksheet(self, standard: str, board: str, subject: str, topic: str, difficulty: str, num_questions: int, performance_summary: str) -> dict:
+#         system_prompt = (
+#             "You are an expert curriculum designer for the Indian education system. "
+#             "Generate an adaptive worksheet in JSON format with a root key 'worksheet' containing a list of question objects. "
+#             "Each question has 'type' ('mcq', 'fill_in_the_blank', or 'short_answer'), 'question', and 'answer'. "
+#             "For 'mcq', include 'options' with 4 strings. For 'fill_in_the_blank', use '____' for the blank."
+#         )
+#         user_prompt = (
+#             f"Generate an adaptive worksheet with {num_questions} questions for Class {standard} ({board} board) in {subject}. "
+#             f"Topic: '{topic}'. Difficulty: {difficulty}. "
+#             f"Focus on areas of weakness: {performance_summary}. "
+#             f"Return a valid JSON object with 'worksheet' as the root key."
+#         )
+#         return self._get_json_response(system_prompt, user_prompt)
+
+#     def get_semantic_grade_and_feedback(self, question: str, student_answer: str, correct_answer: str) -> dict:
+#         system_prompt = (
+#             "You are a strict but fair grading assistant. Evaluate if a student's answer is semantically correct. "
+#             "If the core concept is wrong, mark as 'Incorrect'. If correct but with minor issues, mark as 'Correct' and note the issue. "
+#             "Return a JSON object with 'grade' ('Correct' or 'Incorrect') and 'feedback' (a concise sentence)."
+#         )
+#         user_prompt = (
+#             f"Question: \"{question}\"\n"
+#             f"Student's Answer: \"{student_answer}\"\n"
+#             f"Correct Answer: \"{correct_answer}\"\n"
+#             f"Return JSON with 'grade' and 'feedback'."
+#         )
+#         return self._get_json_response(system_prompt, user_prompt)
+
+#     def generate_performance_overview(self, student_name: str, topic: str, all_feedback: List[dict]) -> str:
+#         system_prompt = (
+#             "You are a kind, motivational AI tutor. Provide encouraging feedback to a student based on worksheet performance. "
+#             "Address the student by name, start with positive reinforcement, explain mistakes gently, and end with encouragement."
+#         )
+#         feedback_summary = "\n".join([
+#             f"- Question '{item['question']}': {item['feedback']}"
+#             for item in all_feedback
+#         ])
+#         user_prompt = (
+#             f"Write a motivational overview for {student_name} on the topic '{topic}'.\n"
+#             f"Incorrect answers:\n{feedback_summary}\n"
+#             f"Explain core concepts simply and end with encouragement."
+#         )
+#         try:
+#             response = client.chat.completions.create(
+#                 model=self.model,
+#                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+#             )
+#             return response.choices[0].message.content.strip()
+#         except Exception as e:
+#             logger.error(f"Error generating performance overview: {e}")
+#             return f"Great effort, {student_name}! Keep practicing {topic} and you'll see improvement soon."
+
+#     def validate_topic_for_subject(self, standard: str, board: str, subject: str, topic: str) -> bool:
+#         system_prompt = (
+#             "Validate if a topic is relevant to a subject for a specific grade and board in the Indian education system. "
+#             "Return only 'Valid' or 'Invalid'."
+#         )
+#         user_prompt = (
+#             f"For Class {standard} ({board} board), is '{topic}' valid for '{subject}'? "
+#             f"Respond with only 'Valid' or 'Invalid'."
+#         )
+#         try:
+#             response = client.chat.completions.create(
+#                 model=self.model,
+#                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+#                 temperature=0.0,
+#             )
+#             ai_verdict = response.choices[0].message.content.strip()
+#             return ai_verdict.lower() == "valid"
+#         except Exception:
+#             return False
+
+#     def generate_class_remediation_plan(self, topic: str, error_count: int, student_count: int) -> str:
+#         system_prompt = (
+#             "You are an educational strategist. Provide actionable remediation suggestions for a teacher to help students improve."
+#         )
+#         user_prompt = (
+#             f"Class is struggling with '{topic}'.\n"
+#             f"{error_count} errors across {student_count} students.\n"
+#             f"Provide 3-4 practical suggestions (e.g., review session, group activity, targeted worksheet)."
+#         )
+#         try:
+#             response = client.chat.completions.create(
+#                 model=self.model,
+#                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+#             )
+#             return response.choices[0].message.content.strip()
+#         except Exception as e:
+#             logger.error(f"Error generating class remediation plan: {e}")
+#             return f"- Schedule a focused review session on {topic}\n- Create targeted practice worksheets\n- Use visual aids and real-life examples\n- Pair students for peer teaching"
+
+#     def generate_student_remediation_plan(self, student_name: str, performance_summary: str) -> str:
+#         system_prompt = (
+#             "You are a compassionate AI counselor. Create a personalized, encouraging remediation plan for a struggling student."
+#         )
+#         user_prompt = (
+#             f"Create a plan for {student_name}.\n"
+#             f"Performance summary:\n{performance_summary}\n"
+#             f"Include 2-3 steps: a conceptual review, a targeted activity, and an encouraging remark."
+#         )
+#         try:
+#             response = client.chat.completions.create(
+#                 model=self.model,
+#                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+#             )
+#             return response.choices[0].message.content.strip()
+#         except Exception as e:
+#             logger.error(f"Error generating student remediation plan: {e}")
+#             return f"1. Review the key concepts with {student_name} one-on-one\n2. Create a targeted practice worksheet\n3. {student_name}, you're making progress - keep going!"
 
 # Initialize AI Assistant (add this after the class definition)
 ai_assistant = AITeacherAssistant()
@@ -1648,7 +1891,6 @@ async def get_resources(db=Depends(get_db), current_user=Depends(get_current_use
         logger.error(f"Error fetching resources: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching resources: {str(e)}")
 
-
 @app.post("/api/tutor/chat")
 async def chat_with_tutor(chat_request: ChatRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
     try:
@@ -1657,41 +1899,155 @@ async def chat_with_tutor(chat_request: ChatRequest, db=Depends(get_db), current
         class_num = chat_request.class_num or int(current_user["class"] or 10)
         subject = chat_request.subject or "Mathematics"
 
-        # Store user message
+        # Store the user's new message first
         await db.execute(
             "INSERT INTO chat_history (user_id, role, message, subject, board, class_num) VALUES ($1, $2, $3, $4, $5, $6)",
             user_id, "user", chat_request.message, subject, board, class_num
         )
+        
+        # --- START: MODIFICATIONS ---
 
-        # Generate response using OpenAI
-        prompt = f"""
-        {SYSTEM_PROMPT}
-        The student has asked: '{chat_request.message}' for {board} Class {class_num} {subject}.
-        Provide a detailed response following the four-part structure:
-        1. Start with a detailed, engaging real-life example that illustrates the concept.
-        2. Provide the textbook definition or explanation, including any formulas or key notes.
-        3. Include a detailed additional example aligned with the textbook style.
-        4. End with an understanding check: "Does this make sense, or should I explain it another way?" followed by a short, syllabus-based quiz question.
-        If the question is not specific to a topic or is outside the syllabus, provide a general response encouraging the student to ask a syllabus-related question.
-        Return only the response text, without any Markdown or code block formatting.
-        """
-        response = client.chat.completions.create(
-            model="gpt-4.1-nano",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=1000
+        # 1. Fetch recent chat history (e.g., last 10 messages)
+        history_records = await db.fetch(
+            """
+            SELECT role, message FROM chat_history
+            WHERE user_id = $1
+            ORDER BY timestamp DESC
+            LIMIT 10
+            """,
+            user_id
         )
-        ai_response = response.choices[0].message.content.strip()
+        
+        # The records are newest-first, so we reverse them for correct chronological order
+        history_records.reverse()
 
-        # Store AI response
+        # 2. Construct the message history for the AI
+        # Start with the system prompt
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] 
+
+        # Add the historical messages
+        for record in history_records:
+            messages.append({"role": record["role"], "content": record["message"]})
+        
+        # The user's latest message is already in history_records, so we don't need to add it again.
+        # The prompt is now the entire message history.
+        
+        # --- END: MODIFICATIONS ---
+
+        # Note: The prompt is no longer a simple f-string. 
+        # We will use the `messages` list directly in the API call.
+        # The JSON response prompt is now part of the SYSTEM_PROMPT.
+        # Let's adjust the system prompt slightly for better JSON handling.
+        
+        JSON_INSTRUCTION_PROMPT = """
+        Analyze the student's latest request based on the conversation history.
+        Decide if a visual aid (diagram, photo, map) would significantly improve the explanation.
+        
+        Provide a detailed response following the four-part structure:
+        1. A detailed, engaging real-life example.
+        2. The textbook definition, formulas, or key notes.
+        3. A detailed additional example.
+        4. An understanding check and a short quiz question.
+
+        If the question is outside the syllabus, respond appropriately.
+        Return your response in a strict JSON format with two keys:
+        1. "explanation": Your textual explanation following the AI tutor persona.
+        2. "image_query": A concise search query (e.g., "simple diagram of photosynthesis") if an image is needed, otherwise null.
+        """
+        
+        # Append the instruction for JSON output as the last user message for clarity
+        messages.append({"role": "user", "content": JSON_INSTRUCTION_PROMPT})
+
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=messages, # Pass the full conversation history
+            max_tokens=1500,
+            response_format={"type": "json_object"}
+        )
+        
+        # Corrected code with error handling
+        raw_content = response.choices[0].message.content
+        try:
+            response_data = json.loads(raw_content)
+            ai_explanation = response_data.get("explanation", "I'm not sure how to respond to that, can you try asking another way?")
+            image_query = response_data.get("image_query")
+        except json.JSONDecodeError:
+            logger.error(f"Failed to decode JSON from AI. Raw content: {raw_content}")
+            # If JSON fails, treat the whole response as a plain text explanation
+            ai_explanation = raw_content
+            image_query = None
+        
+        # response_data = json.loads(response.choices[0].message.content)
+        # ai_explanation = response_data.get("explanation", "I'm not sure how to respond to that, can you try asking another way?")
+        # image_query = response_data.get("image_query")
+
+        image_url = None
+        if image_query:
+            logger.info(f"AI requested an image with query: '{image_query}'")
+            image_url = search_web_for_image(image_query)
+
+        # Store AI text response
         await db.execute(
             "INSERT INTO chat_history (user_id, role, message, subject, board, class_num) VALUES ($1, $2, $3, $4, $5, $6)",
-            user_id, "assistant", ai_response, subject, board, class_num
+            user_id, "assistant", ai_explanation, subject, board, class_num
         )
+        
+        if image_url:
+            await db.execute(
+                "INSERT INTO chat_history (user_id, role, message) VALUES ($1, 'assistant', $2)",
+                user_id, f"IMAGE_URL::{image_url}"
+            )
 
-        return {"response": ai_response}
+        return {"response": ai_explanation, "image_url": image_url}
+
     except Exception as e:
-        logger.error(f"Error in chat endpoint: {str(e)}")
+        logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing chat: {str(e)}")
+
+
+# @app.post("/api/tutor/chat")
+# async def chat_with_tutor(chat_request: ChatRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
+#     try:
+#         user_id = current_user["id"]
+#         board = chat_request.board or current_user["board"] or "CBSE"
+#         class_num = chat_request.class_num or int(current_user["class"] or 10)
+#         subject = chat_request.subject or "Mathematics"
+
+#         # Store user message
+#         await db.execute(
+#             "INSERT INTO chat_history (user_id, role, message, subject, board, class_num) VALUES ($1, $2, $3, $4, $5, $6)",
+#             user_id, "user", chat_request.message, subject, board, class_num
+#         )
+
+#         # Generate response using OpenAI
+#         prompt = f"""
+#         {SYSTEM_PROMPT}
+#         The student has asked: '{chat_request.message}' for {board} Class {class_num} {subject}.
+#         Provide a detailed response following the four-part structure:
+#         1. Start with a detailed, engaging real-life example that illustrates the concept.
+#         2. Provide the textbook definition or explanation, including any formulas or key notes.
+#         3. Include a detailed additional example aligned with the textbook style.
+#         4. End with an understanding check: "Does this make sense, or should I explain it another way?" followed by a short, syllabus-based quiz question.
+#         If the question is not specific to a topic or is outside the syllabus, provide a general response encouraging the student to ask a syllabus-related question.
+#         Return only the response text, without any Markdown or code block formatting.
+#         """
+#         response = client.chat.completions.create(
+#             model="gpt-4.1-nano",
+#             messages=[{"role": "system", "content": prompt}],
+#             max_tokens=1000
+#         )
+#         ai_response = response.choices[0].message.content.strip()
+
+#         # Store AI response
+#         await db.execute(
+#             "INSERT INTO chat_history (user_id, role, message, subject, board, class_num) VALUES ($1, $2, $3, $4, $5, $6)",
+#             user_id, "assistant", ai_response, subject, board, class_num
+#         )
+
+#         return {"response": ai_response}
+#     except Exception as e:
+#         logger.error(f"Error in chat endpoint: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"Error processing chat: {str(e)}")
 
 
 # Get chat history endpoint
@@ -1892,113 +2248,203 @@ async def submit_quiz_results(
         logger.error(f"Failed to submit quiz results: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to submit quiz results: {str(e)}")
 
-
-
 @app.post("/api/study-plan")
 async def create_study_plan(plan_request: StudyPlanRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
     try:
-        user_id = int(current_user["id"])
-        logger.info(f"user_id type: {type(user_id)}, value: {user_id}")
+        user_id = current_user["id"]
+        # Determine if the user is a school or college student
+        # We'll use the 'school_or_college' field from the user's profile
+        education_level = current_user.get("school_or_college")
 
-        # Fetch syllabus from cache
-        cached_syllabus = await db.fetchrow(
-            "SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
-            current_user["board"] or "CBSE", int(current_user["class"] or 10), plan_request.subject
-        )
-        if not cached_syllabus:
-            logger.error(f"Syllabus not found for {current_user['board'] or 'CBSE'} Class {current_user['class'] or 10} {plan_request.subject}")
-            raise HTTPException(status_code=404, detail="Syllabus not found")
-
-        syllabus_data = cached_syllabus["syllabus_data"]
-        if isinstance(syllabus_data, str):
-            try:
-                syllabus = json.loads(syllabus_data)
-            except json.JSONDecodeError as e:
-                logger.error(f"Error parsing syllabus_data: {str(e)}")
-                raise HTTPException(status_code=500, detail="Invalid syllabus data in cache")
-        else:
-            syllabus = syllabus_data
-
-        chapters = syllabus.get("chapters", [])
-        if not chapters:
-            logger.error(f"No chapters found for subject {plan_request.subject}")
-            raise HTTPException(status_code=400, detail="No chapters found for the study plan")
-
-        # Separate weak and non-weak chapters
-        weak_chapters = plan_request.weakChapters or []
-        weak_chapter_list = [chapter for chapter in chapters if chapter["name"] in weak_chapters]
-        other_chapters = [chapter for chapter in chapters if chapter["name"] not in weak_chapters]
-        prioritized_chapters = weak_chapter_list + other_chapters  # Weak chapters come first
-
-        if not prioritized_chapters:
-            logger.error(f"No matching chapters found for subject {plan_request.subject}")
-            raise HTTPException(status_code=400, detail="No matching chapters found for the study plan")
-
-        # Calculate number of weeks needed (e.g., 2-3 chapters per week)
-        chapters_per_week = 2
-        total_weeks = max(1, (len(prioritized_chapters) + chapters_per_week - 1) // chapters_per_week)
-
-        # Generate dynamic study plan
         study_plan_data = {}
-        start_date = datetime.now().date()
-        for week in range(1, total_weeks + 1):
-            week_key = f"Week {week}"
-            study_plan_data[week_key] = []
-            # Select chapters for this week (up to chapters_per_week)
-            week_chapters = prioritized_chapters[(week-1)*chapters_per_week : week*chapters_per_week]
-            for chapter in week_chapters:
-                is_weak = chapter["name"] in weak_chapters
-                study_time = 3.0 if is_weak else 2.0  # More time for weak chapters
-                for topic in chapter.get("topics", [])[:2]:  # Limit to 2 topics per chapter
-                    study_plan_data[week_key].append({
-                        "date": (start_date + timedelta(days=(week-1)*7)).isoformat(),
-                        "chapter": chapter["name"],
-                        "topic": topic["name"],
-                        "subtopic": topic["subtopics"][0] if topic.get("subtopics") else "",
-                        "time": study_time,
-                        "completed": False
-                    })
 
-        # Validate study_plan_data
-        if not study_plan_data or not any(study_plan_data.values()):
-            logger.error("Generated study plan is empty")
-            raise HTTPException(status_code=500, detail="Failed to generate study plan: Empty plan data")
+        if education_level == 'college':
+            # --- COLLEGE LOGIC ---
+            user_course = current_user.get("course")
+            user_stream = current_user.get("stream")
 
+            if not user_course or not user_stream:
+                raise HTTPException(status_code=400, detail="User's college course and stream must be set.")
+            
+            try:
+                # Look up the subjects from your imported catalog
+                all_subjects = COURSE_CATALOG[user_course][user_stream]
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Course or stream not found in the catalog.")
+            
+            # The concept of "weakChapters" for college can be mapped to "focus_subjects"
+            # The request now sends a list of subjects to focus on, not chapters.
+            focus_subjects = plan_request.weakChapters # Re-using the field for focus subjects
+            
+            # Use the new helper function to generate a semester-style plan
+            study_plan_data = generate_college_semester_plan(all_subjects, focus_subjects)
+
+        else:
+            # --- EXISTING SCHOOL LOGIC (Slightly cleaned up) ---
+            board = current_user.get("board") or "CBSE"
+            class_num = int(current_user.get("class") or 10)
+            
+            cached_syllabus = await db.fetchrow(
+                "SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
+                board, class_num, plan_request.subject
+            )
+            if not cached_syllabus:
+                raise HTTPException(status_code=404, detail="Syllabus not found for this school subject.")
+            
+            syllabus = json.loads(cached_syllabus["syllabus_data"]) if isinstance(cached_syllabus["syllabus_data"], str) else cached_syllabus["syllabus_data"]
+            chapters = syllabus.get("chapters", [])
+            
+            # (Your existing logic for generating a school plan goes here)
+            # This is just a simplified version for demonstration
+            for i, chapter in enumerate(chapters[:4]): # Example: Plan for first 4 chapters
+                week_key = f"Week {i+1}"
+                study_plan_data[week_key] = [{
+                    "date": (datetime.now().date() + timedelta(weeks=i)).isoformat(),
+                    "chapter": chapter.get("name"),
+                    "topic": chapter.get("topics")[0].get("name") if chapter.get("topics") else "Introductory Topics",
+                    "time": 2.0,
+                    "completed": False
+                }]
+
+
+        if not study_plan_data:
+            raise HTTPException(status_code=500, detail="Failed to generate study plan.")
+
+        # Store the plan in the database (this part remains the same)
         plan_id = uuid.uuid4()
         created_at = datetime.utcnow()
-
-        # Store the plan in the database
         await db.execute(
             """
             INSERT INTO study_plan (id, user_id, subject, plan_data, weak_chapters, plan_type, created_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
-            plan_id, user_id, plan_request.subject, json.dumps(study_plan_data), 
-            json.dumps(plan_request.weakChapters), plan_request.planType, created_at
+            plan_id, user_id, plan_request.subject, json.dumps(study_plan_data),
+            json.dumps(plan_request.weakChapters), plan_request.planType, datetime.utcnow()
         )
-
-        response = {
+        
+        return {
             "studyPlan": {
-                "id": str(plan_id),
-                "userId": user_id,
-                "subject": plan_request.subject,
-                "planData": study_plan_data,
-                "weakChapters": plan_request.weakChapters or [],
-                "planType": plan_request.planType,
-                "createdAt": created_at.isoformat()
+            "id": str(plan_id),
+            "userId": user_id,
+            "subject": plan_request.subject,
+            "planData": study_plan_data,
+            "weakChapters": plan_request.weakChapters or [],
+            "planType": plan_request.planType,
+            "createdAt": created_at.isoformat()
             }
         }
 
-        logger.info(f"Generated study plan response: {json.dumps(response, indent=2)}")
-        logger.info(f"Generated study plan for user {user_id}, subject {plan_request.subject}, planType {plan_request.planType}")
 
-        return response
-    except asyncpg.exceptions.UndefinedTableError:
-        logger.error("Table study_plan does not exist")
-        raise HTTPException(status_code=500, detail="Study plan table is not set up in the database")
     except Exception as e:
-        logger.error(f"Failed to generate study plan: {str(e)}")
+        logger.error(f"Failed to generate study plan: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate study plan: {str(e)}")
+
+
+# @app.post("/api/study-plan")
+# async def create_study_plan(plan_request: StudyPlanRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
+#     try:
+#         user_id = int(current_user["id"])
+#         logger.info(f"user_id type: {type(user_id)}, value: {user_id}")
+
+#         # Fetch syllabus from cache
+#         cached_syllabus = await db.fetchrow(
+#             "SELECT syllabus_data FROM syllabus_cache WHERE board = $1 AND class_num = $2 AND subject = $3",
+#             current_user["board"] or "CBSE", int(current_user["class"] or 10), plan_request.subject
+#         )
+#         if not cached_syllabus:
+#             logger.error(f"Syllabus not found for {current_user['board'] or 'CBSE'} Class {current_user['class'] or 10} {plan_request.subject}")
+#             raise HTTPException(status_code=404, detail="Syllabus not found")
+
+#         syllabus_data = cached_syllabus["syllabus_data"]
+#         if isinstance(syllabus_data, str):
+#             try:
+#                 syllabus = json.loads(syllabus_data)
+#             except json.JSONDecodeError as e:
+#                 logger.error(f"Error parsing syllabus_data: {str(e)}")
+#                 raise HTTPException(status_code=500, detail="Invalid syllabus data in cache")
+#         else:
+#             syllabus = syllabus_data
+
+#         chapters = syllabus.get("chapters", [])
+#         if not chapters:
+#             logger.error(f"No chapters found for subject {plan_request.subject}")
+#             raise HTTPException(status_code=400, detail="No chapters found for the study plan")
+
+#         # Separate weak and non-weak chapters
+#         weak_chapters = plan_request.weakChapters or []
+#         weak_chapter_list = [chapter for chapter in chapters if chapter["name"] in weak_chapters]
+#         other_chapters = [chapter for chapter in chapters if chapter["name"] not in weak_chapters]
+#         prioritized_chapters = weak_chapter_list + other_chapters  # Weak chapters come first
+
+#         if not prioritized_chapters:
+#             logger.error(f"No matching chapters found for subject {plan_request.subject}")
+#             raise HTTPException(status_code=400, detail="No matching chapters found for the study plan")
+
+#         # Calculate number of weeks needed (e.g., 2-3 chapters per week)
+#         chapters_per_week = 2
+#         total_weeks = max(1, (len(prioritized_chapters) + chapters_per_week - 1) // chapters_per_week)
+
+#         # Generate dynamic study plan
+#         study_plan_data = {}
+#         start_date = datetime.now().date()
+#         for week in range(1, total_weeks + 1):
+#             week_key = f"Week {week}"
+#             study_plan_data[week_key] = []
+#             # Select chapters for this week (up to chapters_per_week)
+#             week_chapters = prioritized_chapters[(week-1)*chapters_per_week : week*chapters_per_week]
+#             for chapter in week_chapters:
+#                 is_weak = chapter["name"] in weak_chapters
+#                 study_time = 3.0 if is_weak else 2.0  # More time for weak chapters
+#                 for topic in chapter.get("topics", [])[:2]:  # Limit to 2 topics per chapter
+#                     study_plan_data[week_key].append({
+#                         "date": (start_date + timedelta(days=(week-1)*7)).isoformat(),
+#                         "chapter": chapter["name"],
+#                         "topic": topic["name"],
+#                         "subtopic": topic["subtopics"][0] if topic.get("subtopics") else "",
+#                         "time": study_time,
+#                         "completed": False
+#                     })
+
+#         # Validate study_plan_data
+#         if not study_plan_data or not any(study_plan_data.values()):
+#             logger.error("Generated study plan is empty")
+#             raise HTTPException(status_code=500, detail="Failed to generate study plan: Empty plan data")
+
+#         plan_id = uuid.uuid4()
+#         created_at = datetime.utcnow()
+
+#         # Store the plan in the database
+#         await db.execute(
+#             """
+#             INSERT INTO study_plan (id, user_id, subject, plan_data, weak_chapters, plan_type, created_at)
+#             VALUES ($1, $2, $3, $4, $5, $6, $7)
+#             """,
+#             plan_id, user_id, plan_request.subject, json.dumps(study_plan_data), 
+#             json.dumps(plan_request.weakChapters), plan_request.planType, created_at
+#         )
+
+#         response = {
+#             "studyPlan": {
+#                 "id": str(plan_id),
+#                 "userId": user_id,
+#                 "subject": plan_request.subject,
+#                 "planData": study_plan_data,
+#                 "weakChapters": plan_request.weakChapters or [],
+#                 "planType": plan_request.planType,
+#                 "createdAt": created_at.isoformat()
+#             }
+#         }
+
+#         logger.info(f"Generated study plan response: {json.dumps(response, indent=2)}")
+#         logger.info(f"Generated study plan for user {user_id}, subject {plan_request.subject}, planType {plan_request.planType}")
+
+#         return response
+#     except asyncpg.exceptions.UndefinedTableError:
+#         logger.error("Table study_plan does not exist")
+#         raise HTTPException(status_code=500, detail="Study plan table is not set up in the database")
+#     except Exception as e:
+#         logger.error(f"Failed to generate study plan: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"Failed to generate study plan: {str(e)}")
     
 
 @app.post("/api/study-plan/create")
@@ -2128,19 +2574,29 @@ async def generate_worksheet(request: GenerateWorksheetRequest, db=Depends(get_d
     except Exception as e:
         logger.error(f"Error generating worksheet: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to generate worksheet")
+    
+# In main.py, replace the existing /api/worksheets endpoint
 
 @app.post("/api/worksheets")
 async def create_worksheet(worksheet: WorksheetCreate, db=Depends(get_db)):
     """Create a custom worksheet"""
     try:
         worksheet_id = str(uuid.uuid4())
+        
+        # --- THIS IS THE FIX ---
+        # 1. Convert the list of Pydantic Question models to a list of dictionaries.
+        worksheet_list_of_dicts = [q.model_dump() for q in worksheet.worksheet]
+        
+        # 2. Now, dump the list of dictionaries to a JSON string for the database.
+        worksheet_json_string = json.dumps(worksheet_list_of_dicts)
+        
         await db.execute("""
             INSERT INTO worksheets (id, standard, board, subject, topic, difficulty, worksheet, created_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
         """, worksheet_id, worksheet.standard, worksheet.board, worksheet.subject, 
-           worksheet.topic, worksheet.difficulty, json.dumps(worksheet.worksheet))
+           worksheet.topic, worksheet.difficulty, worksheet_json_string) # Use the corrected string here
         
-        # Fetch the created worksheet
+        # Fetch the created worksheet to return it
         created_worksheet = await db.fetchrow("""
             SELECT id, standard, board, subject, topic, difficulty, worksheet, 
                    created_at::text as created_at 
@@ -2148,22 +2604,49 @@ async def create_worksheet(worksheet: WorksheetCreate, db=Depends(get_db)):
             WHERE id = $1
         """, worksheet_id)
         
-        worksheet_data = {
-            "id": created_worksheet["id"],
-            "standard": created_worksheet["standard"],
-            "board": created_worksheet["board"],
-            "subject": created_worksheet["subject"],
-            "topic": created_worksheet["topic"],
-            "difficulty": created_worksheet["difficulty"],
-            "worksheet": created_worksheet["worksheet"],
-            "created_at": created_worksheet["created_at"]
-        }
+        worksheet_data = dict(created_worksheet)
         
         logger.info(f"Created custom worksheet {worksheet_id}")
         return {"data": worksheet_data, "success": True}
     except Exception as e:
-        logger.error(f"Error creating worksheet: {str(e)}")
+        logger.error(f"Error creating worksheet: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create worksheet")
+
+# @app.post("/api/worksheets")
+# async def create_worksheet(worksheet: WorksheetCreate, db=Depends(get_db)):
+#     """Create a custom worksheet"""
+#     try:
+#         worksheet_id = str(uuid.uuid4())
+#         await db.execute("""
+#             INSERT INTO worksheets (id, standard, board, subject, topic, difficulty, worksheet, created_at)
+#             VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+#         """, worksheet_id, worksheet.standard, worksheet.board, worksheet.subject, 
+#            worksheet.topic, worksheet.difficulty, json.dumps(worksheet.worksheet))
+        
+#         # Fetch the created worksheet
+#         created_worksheet = await db.fetchrow("""
+#             SELECT id, standard, board, subject, topic, difficulty, worksheet, 
+#                    created_at::text as created_at 
+#             FROM worksheets 
+#             WHERE id = $1
+#         """, worksheet_id)
+        
+#         worksheet_data = {
+#             "id": created_worksheet["id"],
+#             "standard": created_worksheet["standard"],
+#             "board": created_worksheet["board"],
+#             "subject": created_worksheet["subject"],
+#             "topic": created_worksheet["topic"],
+#             "difficulty": created_worksheet["difficulty"],
+#             "worksheet": created_worksheet["worksheet"],
+#             "created_at": created_worksheet["created_at"]
+#         }
+        
+#         logger.info(f"Created custom worksheet {worksheet_id}")
+#         return {"data": worksheet_data, "success": True}
+#     except Exception as e:
+#         logger.error(f"Error creating worksheet: {str(e)}")
+#         raise HTTPException(status_code=500, detail="Failed to create worksheet")
 
 @app.get("/api/assignments")
 async def get_assignments(db=Depends(get_db)):
@@ -2195,6 +2678,9 @@ async def get_assignments(db=Depends(get_db)):
     except Exception as e:
         logger.error(f"Error fetching assignments: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch assignments")
+    
+    
+# In main.py, replace your existing create_assignment function
 
 @app.post("/api/assignments")
 async def create_assignment(assignment: AssignmentCreate, db=Depends(get_db)):
@@ -2211,37 +2697,82 @@ async def create_assignment(assignment: AssignmentCreate, db=Depends(get_db)):
             raise HTTPException(status_code=404, detail="Class not found")
         
         assignment_id = str(uuid.uuid4())
-        assigned_date = datetime.now().strftime('%Y-%m-%d')
         
+        # --- THIS IS THE FIX ---
+        # 1. Get the current date as a proper date object, not a string.
+        assigned_date_obj = datetime.now().date()
+        
+        # 2. Convert the due_date string from the frontend into a date object.
+        due_date_obj = datetime.strptime(assignment.due_date, '%Y-%m-%d').date()
+
         await db.execute("""
             INSERT INTO assignments (id, worksheet_id, class_id, topic, assigned_date, due_date, created_at)
             VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
         """, assignment_id, assignment.worksheet_id, assignment.class_id, 
-           worksheet["topic"], assigned_date, assignment.due_date)
+           worksheet["topic"], assigned_date_obj, due_date_obj) # Use the date objects here
         
-        # Fetch the created assignment
+        # Fetch the created assignment to return it
         created_assignment = await db.fetchrow("""
-            SELECT id, worksheet_id, class_id, topic, assigned_date, due_date, 
+            SELECT id, worksheet_id, class_id, topic, assigned_date::text, due_date::text, 
                    created_at::text as created_at 
             FROM assignments 
             WHERE id = $1
         """, assignment_id)
         
-        assignment_data = {
-            "id": created_assignment["id"],
-            "worksheet_id": created_assignment["worksheet_id"],
-            "class_id": created_assignment["class_id"],
-            "topic": created_assignment["topic"],
-            "assigned_date": created_assignment["assigned_date"],
-            "due_date": created_assignment["due_date"],
-            "created_at": created_assignment["created_at"]
-        }
+        assignment_data = dict(created_assignment)
         
         logger.info(f"Created assignment {assignment_id} for class {assignment.class_id}")
         return {"data": assignment_data, "success": True}
     except Exception as e:
-        logger.error(f"Error creating assignment: {str(e)}")
+        logger.error(f"Error creating assignment: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create assignment")
+
+# @app.post("/api/assignments")
+# async def create_assignment(assignment: AssignmentCreate, db=Depends(get_db)):
+#     """Create a new assignment"""
+#     try:
+#         # Validate worksheet exists
+#         worksheet = await db.fetchrow("SELECT id, topic FROM worksheets WHERE id = $1", assignment.worksheet_id)
+#         if not worksheet:
+#             raise HTTPException(status_code=404, detail="Worksheet not found")
+        
+#         # Validate class exists
+#         class_roster = await db.fetchrow("SELECT id, class_name FROM class_rosters WHERE id = $1", assignment.class_id)
+#         if not class_roster:
+#             raise HTTPException(status_code=404, detail="Class not found")
+        
+#         assignment_id = str(uuid.uuid4())
+#         assigned_date = datetime.now().strftime('%Y-%m-%d')
+        
+#         await db.execute("""
+#             INSERT INTO assignments (id, worksheet_id, class_id, topic, assigned_date, due_date, created_at)
+#             VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+#         """, assignment_id, assignment.worksheet_id, assignment.class_id, 
+#            worksheet["topic"], assigned_date, assignment.due_date)
+        
+#         # Fetch the created assignment
+#         created_assignment = await db.fetchrow("""
+#             SELECT id, worksheet_id, class_id, topic, assigned_date, due_date, 
+#                    created_at::text as created_at 
+#             FROM assignments 
+#             WHERE id = $1
+#         """, assignment_id)
+        
+#         assignment_data = {
+#             "id": created_assignment["id"],
+#             "worksheet_id": created_assignment["worksheet_id"],
+#             "class_id": created_assignment["class_id"],
+#             "topic": created_assignment["topic"],
+#             "assigned_date": created_assignment["assigned_date"],
+#             "due_date": created_assignment["due_date"],
+#             "created_at": created_assignment["created_at"]
+#         }
+        
+#         logger.info(f"Created assignment {assignment_id} for class {assignment.class_id}")
+#         return {"data": assignment_data, "success": True}
+#     except Exception as e:
+#         logger.error(f"Error creating assignment: {str(e)}")
+#         raise HTTPException(status_code=500, detail="Failed to create assignment")
 
 @app.get("/api/assignments/{assignment_id}/submissions")
 async def get_assignment_submissions(assignment_id: str, db=Depends(get_db)):
@@ -2418,6 +2949,8 @@ async def create_submission(submission: SubmissionCreate, db=Depends(get_db)):
     except Exception as e:
         logger.error(f"Error creating submission: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to create submission")
+    
+# In main.py, replace your existing get_class_rosters function with this
 
 @app.get("/api/classes")
 async def get_class_rosters(db=Depends(get_db)):
@@ -2429,13 +2962,15 @@ async def get_class_rosters(db=Depends(get_db)):
             ORDER BY cr.created_at DESC
         """)
         
-        # Convert to response format
         response = []
         for roster in rosters:
-            # Parse students JSON and convert to StudentResponse format
             students_data = []
+            
+            # --- THIS IS THE FIX ---
+            # The 'students' field from the DB is a JSON string, so we parse it first.
             if roster["students"]:
-                for student in roster["students"]:
+                students_list = json.loads(roster["students"]) # Parse the string into a Python list
+                for student in students_list:
                     students_data.append({
                         "id": student["id"],
                         "name": student["name"],
@@ -2455,8 +2990,47 @@ async def get_class_rosters(db=Depends(get_db)):
         logger.info(f"Fetched {len(response)} class rosters")
         return {"data": response, "success": True}
     except Exception as e:
-        logger.error(f"Error fetching class rosters: {str(e)}")
+        logger.error(f"Error fetching class rosters: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch class rosters")
+
+# @app.get("/api/classes")
+# async def get_class_rosters(db=Depends(get_db)):
+#     """Get all class rosters"""
+#     try:
+#         rosters = await db.fetch("""
+#             SELECT cr.id, cr.class_name, cr.students, cr.created_at::text as created_at
+#             FROM class_rosters cr
+#             ORDER BY cr.created_at DESC
+#         """)
+        
+#         # Convert to response format
+#         response = []
+#         for roster in rosters:
+#             # Parse students JSON and convert to StudentResponse format
+#             students_data = []
+#             if roster["students"]:
+#                 for student in roster["students"]:
+#                     students_data.append({
+#                         "id": student["id"],
+#                         "name": student["name"],
+#                         "pin": student["pin"],
+#                         "class_id": student["class_id"],
+#                         "created_at": student["created_at"]
+#                     })
+            
+#             roster_data = {
+#                 "id": roster["id"],
+#                 "class_name": roster["class_name"],
+#                 "students": students_data,
+#                 "created_at": roster["created_at"]
+#             }
+#             response.append(roster_data)
+        
+#         logger.info(f"Fetched {len(response)} class rosters")
+#         return {"data": response, "success": True}
+#     except Exception as e:
+#         logger.error(f"Error fetching class rosters: {str(e)}")
+#         raise HTTPException(status_code=500, detail="Failed to fetch class rosters")
 
 @app.post("/api/classes")
 async def create_class(roster: ClassRosterCreate, db=Depends(get_db)):
@@ -2511,55 +3085,115 @@ async def delete_class(class_id: str, db=Depends(get_db)):
     except Exception as e:
         logger.error(f"Error deleting class: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to delete class")
+    
+# In main.py, replace the create_student function
 
 @app.post("/api/students")
 async def create_student(student: StudentCreate, db=Depends(get_db)):
-    """Create a new student"""
+    """Create a new student and update the class roster's student list."""
     try:
         if not student.pin.isdigit() or len(student.pin) != 4:
             raise HTTPException(status_code=400, detail="PIN must be exactly 4 digits")
         
-        # Check if class exists
-        class_exists = await db.fetchval("SELECT id FROM class_rosters WHERE id = $1", student.class_id)
-        if not class_exists:
+        class_roster = await db.fetchrow("SELECT id, students FROM class_rosters WHERE id = $1", student.class_id)
+        if not class_roster:
             raise HTTPException(status_code=404, detail="Class not found")
         
-        # Check if student already exists in this class
-        existing = await db.fetchval("""
-            SELECT id FROM students 
-            WHERE class_id = $1 AND name = $2
-        """, student.class_id, student.name.strip())
+        existing = await db.fetchval(
+            "SELECT id FROM students WHERE class_id = $1 AND name = $2",
+            student.class_id, student.name.strip()
+        )
         if existing:
             raise HTTPException(status_code=400, detail="Student already exists in this class")
         
         student_id = str(uuid.uuid4())
-        await db.execute("""
-            INSERT INTO students (id, name, pin, class_id, created_at)
-            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-        """, student_id, student.name.strip(), student.pin, student.class_id)
-        
-        # Fetch the created student
-        created_student = await db.fetchrow("""
-            SELECT id, name, pin, class_id, created_at::text as created_at
-            FROM students 
-            WHERE id = $1
-        """, student_id)
-        
-        student_data = {
-            "id": created_student["id"],
-            "name": created_student["name"],
-            "pin": created_student["pin"],
-            "class_id": created_student["class_id"],
-            "created_at": created_student["created_at"]
+        created_at_time = datetime.utcnow()
+        await db.execute(
+            "INSERT INTO students (id, name, pin, class_id, created_at) VALUES ($1, $2, $3, $4, $5)",
+            student_id, student.name.strip(), student.pin, student.class_id, created_at_time
+        )
+
+        new_student_record = await db.fetchrow(
+            "SELECT id, name, pin, class_id, created_at FROM students WHERE id = $1", 
+            student_id
+        )
+
+        # --- THIS IS THE FIX ---
+        # 1. Manually convert the record to a dictionary, ensuring UUIDs and datetimes are strings.
+        student_dict = {
+            "id": str(new_student_record['id']),
+            "name": new_student_record['name'],
+            "pin": new_student_record['pin'],
+            "class_id": str(new_student_record['class_id']),
+            "created_at": new_student_record['created_at'].isoformat()
         }
+
+        # 2. Update the JSONB column in the 'class_rosters' table
+        current_students = json.loads(class_roster['students'] or '[]')
+        current_students.append(student_dict)
         
-        logger.info(f"Created student {student_id} in class {student.class_id}")
-        return {"data": student_data, "success": True}
+        await db.execute(
+            "UPDATE class_rosters SET students = $1 WHERE id = $2",
+            json.dumps(current_students), student.class_id
+        )
+        
+        logger.info(f"Created student {student_id} and updated roster for class {student.class_id}")
+        return {"data": student_dict, "success": True}
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating student: {str(e)}")
+        logger.error(f"Error creating student: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create student")
+    
+# @app.post("/api/students")
+# async def create_student(student: StudentCreate, db=Depends(get_db)):
+#     """Create a new student"""
+#     try:
+#         if not student.pin.isdigit() or len(student.pin) != 4:
+#             raise HTTPException(status_code=400, detail="PIN must be exactly 4 digits")
+        
+#         # Check if class exists
+#         class_exists = await db.fetchval("SELECT id FROM class_rosters WHERE id = $1", student.class_id)
+#         if not class_exists:
+#             raise HTTPException(status_code=404, detail="Class not found")
+        
+#         # Check if student already exists in this class
+#         existing = await db.fetchval("""
+#             SELECT id FROM students 
+#             WHERE class_id = $1 AND name = $2
+#         """, student.class_id, student.name.strip())
+#         if existing:
+#             raise HTTPException(status_code=400, detail="Student already exists in this class")
+        
+#         student_id = str(uuid.uuid4())
+#         await db.execute("""
+#             INSERT INTO students (id, name, pin, class_id, created_at)
+#             VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+#         """, student_id, student.name.strip(), student.pin, student.class_id)
+        
+#         # Fetch the created student
+#         created_student = await db.fetchrow("""
+#             SELECT id, name, pin, class_id, created_at::text as created_at
+#             FROM students 
+#             WHERE id = $1
+#         """, student_id)
+        
+#         student_data = {
+#             "id": created_student["id"],
+#             "name": created_student["name"],
+#             "pin": created_student["pin"],
+#             "class_id": created_student["class_id"],
+#             "created_at": created_student["created_at"]
+#         }
+        
+#         logger.info(f"Created student {student_id} in class {student.class_id}")
+#         return {"data": student_data, "success": True}
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Error creating student: {str(e)}")
+#         raise HTTPException(status_code=500, detail="Failed to create student")
 
 @app.delete("/api/classes/{class_id}/students/{student_id}")
 async def delete_student(class_id: str, student_id: str, db=Depends(get_db)):
@@ -2618,3 +3252,131 @@ async def generate_student_remediation_plan(request: StudentRemediationRequest, 
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+# Endpoint to get subjects based on course and stream
+
+@app.get("/api/college/subjects/{course}/{stream}")
+async def get_college_subjects(course: str, stream: str, current_user=Depends(get_current_user)):
+    try:
+        # Look up the subjects in your imported COURSE_CATALOG
+        subjects = COURSE_CATALOG.get(course, {}).get(stream, [])
+        if not subjects:
+            raise HTTPException(status_code=404, detail="Course or stream not found.")
+        return {"subjects": subjects}
+    except Exception as e:
+        logger.error(f"Error fetching college subjects: {e}")
+        raise HTTPException(status_code=500, detail="Could not retrieve subjects.")
+
+#endpoints for document upload and chat
+
+@app.post("/api/documents/upload")
+async def upload_document(file: UploadFile = File(...), current_user=Depends(get_current_user)):
+    """
+    Handles uploading a new PDF or TXT file, processing it, and indexing it into Qdrant.
+    """
+    try:
+        # The logic from your Streamlit file uploader goes into this service function
+        await process_and_index_file(file.file, file.filename)
+        return {"message": f"Successfully uploaded and indexed '{file.filename}'."}
+    except Exception as e:
+        logger.error(f"Error uploading document: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to process document.")
+
+@app.get("/api/documents", response_model=DocumentListResponse)
+async def list_documents(current_user=Depends(get_current_user)):
+    """
+    Retrieves a list of all unique document filenames available in the vector store.
+    """
+    try:
+        # This service function gets the unique filenames from Qdrant metadata
+        filenames = await get_indexed_filenames()
+        return {"filenames": filenames}
+    except Exception as e:
+        logger.error(f"Error listing documents: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not retrieve document list.")
+
+@app.post("/api/documents/chat")
+async def chat_with_documents(request: DocumentChatRequest, current_user=Depends(get_current_user)):
+    """
+    Handles a chat message for a set of selected documents.
+    """
+    try:
+        # 1. Create a document-specific agent on-the-fly using the selected filenames
+        doc_agent = await create_document_agent(request.selected_filenames)
+
+        # 2. Get the response from the agent
+        response = await doc_agent.chat(request.message)
+        
+        # You can also add logic here to save the chat history to a new database table
+        # e.g., 'document_chat_history'
+
+        return {"response": str(response)}
+    except Exception as e:
+        logger.error(f"Error in document chat: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error processing document chat request.")
+    
+###### MOCK-TEST-GENERATOR ###########
+    
+
+@app.post("/api/mock-test/generate")
+async def create_mock_test(request: MockTestRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
+    try:
+        # This service function will contain your pipeline logic
+        questions = await generate_mock_test(
+            subject=request.subject,
+            student_class=request.student_class,
+            board=request.board,
+            topic=request.topic,
+            question_count=request.question_count
+        )
+
+        if not questions:
+            raise HTTPException(status_code=500, detail="Failed to generate questions.")
+
+        test_id = str(uuid.uuid4())
+        await db.execute(
+            """
+            INSERT INTO mock_tests (id, user_id, subject, topic, questions)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            test_id, current_user["id"], request.subject, request.topic, json.dumps(questions)
+        )
+        
+        return {"test_id": test_id, "questions": questions}
+
+    except Exception as e:
+        logger.error(f"Error generating mock test: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate mock test.")
+
+@app.post("/api/mock-test/submit")
+async def submit_mock_test(request: MockTestSubmissionRequest, db=Depends(get_db), current_user=Depends(get_current_user)):
+    try:
+        test_record = await db.fetchrow("SELECT questions FROM mock_tests WHERE id = $1", uuid.UUID(request.test_id))
+        if not test_record:
+            raise HTTPException(status_code=404, detail="Mock test not found.")
+        
+        questions = json.loads(test_record["questions"])
+
+        # This service function will contain your grading logic
+        graded_results, final_score = await evaluate_student_answers(questions, request.answers)
+        
+        result_id = str(uuid.uuid4())
+        await db.execute(
+            """
+            INSERT INTO mock_test_results (id, test_id, user_id, answers, graded_results, final_score)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            result_id, uuid.UUID(request.test_id), current_user["id"], json.dumps(request.answers), json.dumps(graded_results), final_score
+        )
+        
+        return {"result_id": result_id, "graded_results": graded_results, "final_score": final_score}
+
+    except Exception as e:
+        logger.error(f"Error submitting mock test: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to submit mock test.")
+
+
+
+
+
+
