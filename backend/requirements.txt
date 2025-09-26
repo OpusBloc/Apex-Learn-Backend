@@ -8,3 +8,4 @@ databases[sqlite]
 python-dotenv
 pydantic
 bcrypt
+google-api-python-client
