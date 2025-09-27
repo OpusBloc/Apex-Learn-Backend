@@ -51,7 +51,6 @@ ACCESS_TOKEN_EXPIRE_DAYS = 1
 
 # Database connection
 async def get_db():
-
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         logger.error("DATABASE_URL environment variable is not set.")
@@ -59,26 +58,33 @@ async def get_db():
     
     conn = None
     try:
+        # Connect using the single DATABASE_URL
         conn = await asyncpg.connect(dsn=database_url)
         yield conn
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database connection or query error: {e}")
+        raise HTTPException(status_code=500, detail="Database error.")
     finally:
         if conn:
             await conn.close()
+
+# # Database connection
+# async def get_db():
     
-    # try:
-    #     conn = await asyncpg.connect(
-    #         user='postgres',
-    #         password='admin',
-    #         database='edututor',
-    #         host='localhost'
-    #     )
-    #     try:
-    #         yield conn
-    #     finally:
-    #         await conn.close()
-    except asyncpg.exceptions.ConnectionDoesNotExistError as e:
-        logger.error(f"Database connection failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to connect to the database")
+#     try:
+#         conn = await asyncpg.connect(
+#             user='postgres',
+#             password='admin',
+#             database='edututor',
+#             host='localhost'
+#         )
+#         try:
+#             yield conn
+#         finally:
+#             await conn.close()
+#     except asyncpg.exceptions.ConnectionDoesNotExistError as e:
+#         logger.error(f"Database connection failed: {str(e)}")
+#         raise HTTPException(status_code=500, detail="Failed to connect to the database")
 
 # Pydantic models
 class UserCreate(BaseModel):
@@ -3389,6 +3395,7 @@ async def submit_mock_test(request: MockTestSubmissionRequest, db=Depends(get_db
     except Exception as e:
         logger.error(f"Error submitting mock test: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to submit mock test.")
+
 
 
 
