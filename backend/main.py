@@ -52,12 +52,19 @@ ACCESS_TOKEN_EXPIRE_DAYS = 1
 # Database connection
 async def get_db():
     try:
-        conn = await asyncpg.connect(
-            user='postgres',
-            password='admin',
-            database='edututor',
-            host='localhost'
-        )
+        # NEW and correct for deployment
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            raise HTTPException(status_code=500, detail="DATABASE_URL is not configured.")
+        conn = await asyncpg.connect(dsn=database_url)
+
+        
+        # conn = await asyncpg.connect(
+        #     user='postgres',
+        #     password='admin',
+        #     database='edututor',
+        #     host='localhost'
+        # )
         try:
             yield conn
         finally:
@@ -3375,6 +3382,7 @@ async def submit_mock_test(request: MockTestSubmissionRequest, db=Depends(get_db
     except Exception as e:
         logger.error(f"Error submitting mock test: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to submit mock test.")
+
 
 
 
