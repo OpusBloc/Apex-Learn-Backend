@@ -16,3 +16,5 @@ pydantic
 python-multipart
 google-api-python-client
 asyncpg
+llama-index
+
