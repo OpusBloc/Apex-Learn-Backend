@@ -51,24 +51,31 @@ ACCESS_TOKEN_EXPIRE_DAYS = 1
 
 # Database connection
 async def get_db():
-    try:
-        # NEW and correct for deployment
-        database_url = os.getenv("DATABASE_URL")
-        if not database_url:
-            raise HTTPException(status_code=500, detail="DATABASE_URL is not configured.")
-        conn = await asyncpg.connect(dsn=database_url)
 
-        
-        # conn = await asyncpg.connect(
-        #     user='postgres',
-        #     password='admin',
-        #     database='edututor',
-        #     host='localhost'
-        # )
-        try:
-            yield conn
-        finally:
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        logger.error("DATABASE_URL environment variable is not set.")
+        raise HTTPException(status_code=500, detail="Database connection is not configured.")
+    
+    conn = None
+    try:
+        conn = await asyncpg.connect(dsn=database_url)
+        yield conn
+    finally:
+        if conn:
             await conn.close()
+    
+    # try:
+    #     conn = await asyncpg.connect(
+    #         user='postgres',
+    #         password='admin',
+    #         database='edututor',
+    #         host='localhost'
+    #     )
+    #     try:
+    #         yield conn
+    #     finally:
+    #         await conn.close()
     except asyncpg.exceptions.ConnectionDoesNotExistError as e:
         logger.error(f"Database connection failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to connect to the database")
@@ -3382,6 +3389,7 @@ async def submit_mock_test(request: MockTestSubmissionRequest, db=Depends(get_db
     except Exception as e:
         logger.error(f"Error submitting mock test: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to submit mock test.")
+
 
 
 
