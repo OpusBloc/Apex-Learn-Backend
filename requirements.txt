@@ -17,4 +17,8 @@ python-multipart
 google-api-python-client
 asyncpg
 llama-index
+llama-index>=0.10.20
+llama-index-vector-stores-qdrant
+qdrant-client
+
 
