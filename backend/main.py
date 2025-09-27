@@ -34,32 +34,15 @@ load_dotenv()
 
 app = FastAPI()
 
-# List of allowed origins
-origins = [
-    "http://localhost:5173",  # Your local frontend for development
-]
-
-# Get the deployed frontend URL from an environment variable
-frontend_url = os.getenv("FRONTEND_URL")
-if frontend_url:
-    origins.append(frontend_url)
-
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, # Use the dynamic list of origins
+    # allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "https://apex-learn-frontend.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# # CORS middleware
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["http://localhost:5173"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -3392,6 +3375,7 @@ async def submit_mock_test(request: MockTestSubmissionRequest, db=Depends(get_db
     except Exception as e:
         logger.error(f"Error submitting mock test: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to submit mock test.")
+
 
 
 
